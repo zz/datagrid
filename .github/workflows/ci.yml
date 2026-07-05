@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-14 # ARM64, matches the target platform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Paths are scoped to our packages: frontend/node_modules contains
+      # third-party Go code (e.g. the flatted npm package) that ./... would
+      # otherwise pick up.
+      - name: Check gofmt
+        run: test -z "$(gofmt -l main.go internal)" || (gofmt -l main.go internal && exit 1)
+
+      - name: go vet
+        run: go vet . ./internal/...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build app (generates bindings, tsc, vite, go build)
+        run: wails build
+
+      - name: Lint frontend
+        run: npm run lint
+        working-directory: frontend
+
+      - name: go test
+        run: go test . ./internal/...
