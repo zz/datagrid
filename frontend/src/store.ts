@@ -11,6 +11,13 @@ import {
     LoadTableRows,
     OpenTable,
     PreviewChangeset,
+    RedisCommand,
+    RedisDatabases,
+    RedisDelete,
+    RedisGet,
+    RedisScan,
+    RedisSetString,
+    RedisSetTTL,
     RunQuery,
 } from '../wailsjs/go/api/App'
 import { drivers } from '../wailsjs/go/models'
@@ -35,12 +42,48 @@ export interface Tab {
     id: string
     connId: string
     title: string
-    kind: 'query' | 'table'
+    kind: 'query' | 'table' | 'redis'
     sql: string
     // Table tabs only:
     schema?: string
     table?: string
 }
+
+export interface ReplLine {
+    command: string
+    text: string
+    error: boolean
+}
+
+export interface RedisView {
+    db: number
+    databases: drivers.RedisDB[]
+    pattern: string
+    typeFilter: string
+    keys: drivers.RedisKey[]
+    cursor: number
+    hasMore: boolean
+    loading: boolean
+    selectedKey: string | null
+    value: drivers.RedisValue | null
+    repl: ReplLine[]
+    error: string | null
+}
+
+const emptyRedisView = (): RedisView => ({
+    db: 0,
+    databases: [],
+    pattern: '',
+    typeFilter: '',
+    keys: [],
+    cursor: 0,
+    hasMore: false,
+    loading: false,
+    selectedKey: null,
+    value: null,
+    repl: [],
+    error: null,
+})
 
 export interface PendingEdit {
     kind: 'update' | 'insert' | 'delete'
@@ -103,6 +146,7 @@ interface AppState {
     queries: Record<string, QueryState> // by tab id
     queryToTab: Record<string, string>
     tableViews: Record<string, TableView> // by tab id
+    redisViews: Record<string, RedisView> // by tab id
     history: meta.HistoryEntry[]
     historyOpen: boolean
     lastError: string | null
@@ -115,6 +159,7 @@ interface AppState {
     closeDialog: () => void
     openQueryTab: (connId: string) => void
     openTableTab: (connId: string, schema: string, table: string) => Promise<void>
+    openRedisTab: (connId: string, db: number) => Promise<void>
     closeTab: (tabId: string) => void
     setActiveTab: (tabId: string) => void
     setTabSql: (tabId: string, sql: string) => void
@@ -132,6 +177,15 @@ interface AppState {
     stageDelete: (tabId: string, rowIndex: number) => void
     discardEdits: (tabId: string) => void
     applyEdits: (tabId: string) => Promise<void>
+    // Redis view actions:
+    redisScan: (tabId: string, reset: boolean) => Promise<void>
+    redisSetDb: (tabId: string, db: number) => Promise<void>
+    redisSetPattern: (tabId: string, pattern: string, typeFilter: string) => void
+    redisSelectKey: (tabId: string, key: string) => Promise<void>
+    redisSaveString: (tabId: string, value: string) => Promise<void>
+    redisSaveTTL: (tabId: string, seconds: number) => Promise<void>
+    redisDeleteKey: (tabId: string, key: string) => Promise<void>
+    redisRunCommand: (tabId: string, command: string) => Promise<void>
     // History actions:
     loadHistory: (search: string) => Promise<void>
     toggleHistory: (open: boolean) => void
@@ -144,6 +198,7 @@ export const useApp = create<AppState>((set, get) => ({
     connecting: {},
     autocomplete: {},
     tableViews: {},
+    redisViews: {},
     history: [],
     historyOpen: false,
     dialog: { open: false, editing: null },
@@ -231,17 +286,49 @@ export const useApp = create<AppState>((set, get) => ({
         await get().reloadTable(tab.id)
     },
 
+    openRedisTab: async (connId, db) => {
+        const existing = get().tabs.find(t => t.kind === 'redis' && t.connId === connId)
+        if (existing) {
+            set({ activeTabId: existing.id })
+            if (db !== get().redisViews[existing.id]?.db) await get().redisSetDb(existing.id, db)
+            return
+        }
+        const conn = get().connections.find(c => c.id === connId)
+        const tab: Tab = {
+            id: genId('tab'),
+            connId,
+            title: conn ? conn.name : 'Redis',
+            kind: 'redis',
+            sql: '',
+        }
+        set(s => ({
+            tabs: [...s.tabs, tab],
+            activeTabId: tab.id,
+            redisViews: { ...s.redisViews, [tab.id]: { ...emptyRedisView(), db } },
+        }))
+        try {
+            const databases = await RedisDatabases(connId)
+            setRedis(set, tab.id, { databases: databases ?? [] })
+        } catch (err) {
+            setRedis(set, tab.id, { error: String(err) })
+        }
+        await get().redisScan(tab.id, true)
+    },
+
     closeTab: (tabId) => {
         set(s => {
             const tabs = s.tabs.filter(t => t.id !== tabId)
             const queries = { ...s.queries }
             const tableViews = { ...s.tableViews }
+            const redisViews = { ...s.redisViews }
             delete queries[tabId]
             delete tableViews[tabId]
+            delete redisViews[tabId]
             return {
                 tabs,
                 queries,
                 tableViews,
+                redisViews,
                 activeTabId:
                     s.activeTabId === tabId ? (tabs.length ? tabs[tabs.length - 1].id : null) : s.activeTabId,
             }
@@ -453,6 +540,114 @@ export const useApp = create<AppState>((set, get) => ({
         }
     },
 
+    redisScan: async (tabId, reset) => {
+        const tab = get().tabs.find(t => t.id === tabId)
+        const view = get().redisViews[tabId]
+        if (!tab || !view) return
+        setRedis(set, tabId, { loading: true, error: null })
+        try {
+            const cursor = reset ? 0 : view.cursor
+            const res = await RedisScan(
+                tab.connId,
+                drivers.ScanRequest.createFrom({
+                    db: view.db,
+                    pattern: view.pattern,
+                    typeFilter: view.typeFilter,
+                    cursor,
+                    count: 200,
+                }),
+            )
+            const keys = res.keys ?? []
+            setRedis(set, tabId, {
+                keys: reset ? keys : [...view.keys, ...keys],
+                cursor: res.cursor,
+                hasMore: res.cursor !== 0,
+                loading: false,
+            })
+        } catch (err) {
+            setRedis(set, tabId, { loading: false, error: String(err) })
+        }
+    },
+
+    redisSetDb: async (tabId, db) => {
+        setRedis(set, tabId, { db, keys: [], cursor: 0, selectedKey: null, value: null })
+        await get().redisScan(tabId, true)
+    },
+
+    redisSetPattern: (tabId, pattern, typeFilter) => {
+        setRedis(set, tabId, { pattern, typeFilter })
+    },
+
+    redisSelectKey: async (tabId, key) => {
+        const tab = get().tabs.find(t => t.id === tabId)
+        const view = get().redisViews[tabId]
+        if (!tab || !view) return
+        setRedis(set, tabId, { selectedKey: key, value: null })
+        try {
+            const value = await RedisGet(tab.connId, view.db, key)
+            setRedis(set, tabId, { value })
+        } catch (err) {
+            setRedis(set, tabId, { error: String(err) })
+        }
+    },
+
+    redisSaveString: async (tabId, value) => {
+        const tab = get().tabs.find(t => t.id === tabId)
+        const view = get().redisViews[tabId]
+        if (!tab || !view || !view.selectedKey) return
+        try {
+            await RedisSetString(tab.connId, view.db, view.selectedKey, value)
+            await get().redisSelectKey(tabId, view.selectedKey)
+        } catch (err) {
+            setRedis(set, tabId, { error: String(err) })
+        }
+    },
+
+    redisSaveTTL: async (tabId, seconds) => {
+        const tab = get().tabs.find(t => t.id === tabId)
+        const view = get().redisViews[tabId]
+        if (!tab || !view || !view.selectedKey) return
+        try {
+            await RedisSetTTL(tab.connId, view.db, view.selectedKey, seconds)
+            await get().redisSelectKey(tabId, view.selectedKey)
+        } catch (err) {
+            setRedis(set, tabId, { error: String(err) })
+        }
+    },
+
+    redisDeleteKey: async (tabId, key) => {
+        const tab = get().tabs.find(t => t.id === tabId)
+        const view = get().redisViews[tabId]
+        if (!tab || !view) return
+        try {
+            await RedisDelete(tab.connId, view.db, key)
+            setRedis(set, tabId, {
+                keys: view.keys.filter(k => k.key !== key),
+                selectedKey: view.selectedKey === key ? null : view.selectedKey,
+                value: view.selectedKey === key ? null : view.value,
+            })
+        } catch (err) {
+            setRedis(set, tabId, { error: String(err) })
+        }
+    },
+
+    redisRunCommand: async (tabId, command) => {
+        const tab = get().tabs.find(t => t.id === tabId)
+        const view = get().redisViews[tabId]
+        if (!tab || !view || !command.trim()) return
+        try {
+            const reply = await RedisCommand(tab.connId, view.db, command)
+            const line: ReplLine = {
+                command,
+                text: reply.error ? reply.error : reply.text,
+                error: !!reply.error,
+            }
+            setRedis(set, tabId, { repl: [...view.repl, line] })
+        } catch (err) {
+            setRedis(set, tabId, { repl: [...view.repl, { command, text: String(err), error: true }] })
+        }
+    },
+
     loadHistory: async (search) => {
         const entries = await ListHistory('', search, 200)
         set({ history: entries ?? [] })
@@ -477,6 +672,18 @@ function setView(
         const view = s.tableViews[tabId]
         if (!view) return {}
         return { tableViews: { ...s.tableViews, [tabId]: { ...view, ...patch } } }
+    })
+}
+
+function setRedis(
+    set: (fn: (s: AppState) => Partial<AppState>) => void,
+    tabId: string,
+    patch: Partial<RedisView>,
+) {
+    set(s => {
+        const view = s.redisViews[tabId]
+        if (!view) return {}
+        return { redisViews: { ...s.redisViews, [tabId]: { ...view, ...patch } } }
     })
 }
 

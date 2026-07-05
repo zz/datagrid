@@ -7,6 +7,7 @@ import Sidebar from './features/connections/Sidebar'
 import ConnectionDialog from './features/connections/ConnectionDialog'
 import QueryTab from './features/query/QueryTab'
 import TableDataTab from './features/tabledata/TableDataTab'
+import RedisTab from './features/redis/RedisTab'
 import HistoryPanel from './features/history/HistoryPanel'
 
 function App() {
@@ -54,7 +55,9 @@ function App() {
                             className={`tab ${t.id === activeTabId ? 'active' : ''}`}
                             onClick={() => setActiveTab(t.id)}
                         >
-                            <span className={`tab-kind ${t.kind}`}>{t.kind === 'table' ? '▦' : '›_'}</span>
+                            <span className={`tab-kind ${t.kind}`}>
+                                {t.kind === 'table' ? '▦' : t.kind === 'redis' ? '◆' : '›_'}
+                            </span>
                             {t.title}
                             <span
                                 className="tab-close"
@@ -81,7 +84,13 @@ function App() {
                         // Keep every tab mounted so editors/results survive switching.
                         tabs.map(t => (
                             <div key={t.id} className="tab-pane" style={{ display: t.id === activeTabId ? 'flex' : 'none' }}>
-                                {t.kind === 'table' ? <TableDataTab tab={t} /> : <QueryTab tab={t} />}
+                                {t.kind === 'table' ? (
+                                    <TableDataTab tab={t} />
+                                ) : t.kind === 'redis' ? (
+                                    <RedisTab tab={t} />
+                                ) : (
+                                    <QueryTab tab={t} />
+                                )}
                             </div>
                         ))
                     ) : (

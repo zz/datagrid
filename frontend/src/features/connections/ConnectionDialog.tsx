@@ -3,7 +3,7 @@ import { SaveConnection, TestConnection } from '../../../wailsjs/go/api/App'
 import { drivers } from '../../../wailsjs/go/models'
 import { useApp } from '../../store'
 
-const DEFAULT_PORTS: Record<string, string> = { postgres: '5432', mysql: '3306' }
+const DEFAULT_PORTS: Record<string, string> = { postgres: '5432', mysql: '3306', redis: '6379' }
 
 const emptyForm = {
     name: '',
@@ -122,6 +122,7 @@ export default function ConnectionDialog() {
                     <select value={form.engine} onChange={setEngine}>
                         <option value="postgres">PostgreSQL</option>
                         <option value="mysql">MySQL / MariaDB</option>
+                        <option value="redis">Redis / Valkey</option>
                     </select>
                     <label>Name</label>
                     <input value={form.name} onChange={set('name')} placeholder="My database" />

@@ -17,6 +17,7 @@ import (
 	"datagrid/internal/drivers"
 	_ "datagrid/internal/drivers/mysql"    // register driver
 	_ "datagrid/internal/drivers/postgres" // register driver
+	_ "datagrid/internal/drivers/redis"    // register driver
 	"datagrid/internal/meta"
 	"datagrid/internal/secrets"
 	"datagrid/internal/tunnel"
@@ -332,6 +333,119 @@ func (a *App) ApplyChangeset(connID string, req drivers.ChangesetRequest) (*driv
 	ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
 	defer cancel()
 	return te.ApplyChanges(ctx, req)
+}
+
+// --- Redis (design §4/§6) ----------------------------------------------
+
+func (a *App) keyValue(connID string) (drivers.KeyValue, *openSession, error) {
+	os, err := a.session(connID)
+	if err != nil {
+		return nil, nil, err
+	}
+	kv, ok := os.session.(drivers.KeyValue)
+	if !ok {
+		return nil, nil, errors.New("this connection is not a key-value store")
+	}
+	return kv, os, nil
+}
+
+// RedisDatabases lists logical databases 0–15 with key counts.
+func (a *App) RedisDatabases(connID string) ([]drivers.RedisDB, error) {
+	kv, _, err := a.keyValue(connID)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+	defer cancel()
+	return kv.ListDatabases(ctx)
+}
+
+// RedisScan returns one SCAN page of keys with types and TTLs.
+func (a *App) RedisScan(connID string, req drivers.ScanRequest) (*drivers.ScanResult, error) {
+	kv, _, err := a.keyValue(connID)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	defer cancel()
+	return kv.ScanKeys(ctx, req)
+}
+
+// RedisGet returns the type-aware value and TTL of a key.
+func (a *App) RedisGet(connID string, db int, key string) (*drivers.RedisValue, error) {
+	kv, _, err := a.keyValue(connID)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	defer cancel()
+	return kv.GetValue(ctx, db, key)
+}
+
+// RedisSetString overwrites a string key (blocked on read-only connections).
+func (a *App) RedisSetString(connID string, db int, key, value string) error {
+	kv, os, err := a.keyValue(connID)
+	if err != nil {
+		return err
+	}
+	if os.cfg.ReadOnly {
+		return errors.New("connection is read-only; edits are disabled")
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+	defer cancel()
+	return kv.SetString(ctx, db, key, value)
+}
+
+// RedisSetTTL sets a key's expiry in seconds; negative persists it.
+func (a *App) RedisSetTTL(connID string, db int, key string, seconds int64) error {
+	kv, os, err := a.keyValue(connID)
+	if err != nil {
+		return err
+	}
+	if os.cfg.ReadOnly {
+		return errors.New("connection is read-only; edits are disabled")
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+	defer cancel()
+	return kv.SetTTL(ctx, db, key, seconds)
+}
+
+// RedisDelete removes a key (blocked on read-only connections).
+func (a *App) RedisDelete(connID string, db int, key string) error {
+	kv, os, err := a.keyValue(connID)
+	if err != nil {
+		return err
+	}
+	if os.cfg.ReadOnly {
+		return errors.New("connection is read-only; edits are disabled")
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+	defer cancel()
+	return kv.DeleteKey(ctx, db, key)
+}
+
+// RedisCommand runs a raw command for the REPL and records it in history.
+func (a *App) RedisCommand(connID string, db int, command string) (*drivers.RedisReply, error) {
+	kv, _, err := a.keyValue(connID)
+	if err != nil {
+		return nil, err
+	}
+	args := strings.Fields(command)
+	if len(args) == 0 {
+		return &drivers.RedisReply{}, nil
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	defer cancel()
+	started := time.Now()
+	reply, err := kv.RawCommand(ctx, db, args)
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	} else if reply != nil {
+		errText = reply.Error
+	}
+	_ = a.meta.RecordHistory(connID, command, started, time.Since(started), 0, errText)
+	return reply, err
 }
 
 // --- History ------------------------------------------------------------
