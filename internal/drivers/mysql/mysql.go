@@ -45,7 +45,8 @@ func (d *myDriver) Connect(ctx context.Context, cfg *drivers.ConnectionConfig, o
 	mc.Net = "tcp"
 	mc.Addr = fmt.Sprintf("%s:%d", cfg.Host, port)
 	mc.DBName = cfg.Database
-	mc.ParseTime = true // DATE/DATETIME/TIMESTAMP as time.Time
+	mc.ParseTime = true           // DATE/DATETIME/TIMESTAMP as time.Time
+	mc.Timeout = 10 * time.Second // dial timeout — fail fast if unreachable
 
 	switch cfg.TLSMode {
 	case "", "prefer":

@@ -189,7 +189,20 @@ interface AppState {
     // History actions:
     loadHistory: (search: string) => Promise<void>
     toggleHistory: (open: boolean) => void
+    // Flip a connection's dot to disconnected when an op fails with what
+    // looks like a dropped/unreachable connection, so the UI stops implying
+    // it is still live.
+    markMaybeDisconnected: (connId: string, err: unknown) => void
     setError: (msg: string | null) => void
+}
+
+// Error-message signatures that mean the connection is gone rather than the
+// query itself being bad. Kept broad on purpose — a false positive only
+// greys a dot the user can re-click to reconnect.
+function looksDisconnected(msg: string): boolean {
+    return /connection refused|connection reset|broken pipe|\bEOF\b|closed pool|conn closed|server closed|no such host|i\/o timeout|context deadline exceeded|bad connection|dial tcp|network is unreachable|connect:|not connected/i.test(
+        msg,
+    )
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -399,6 +412,7 @@ export const useApp = create<AppState>((set, get) => ({
     applyDone: (summary) => {
         const tabId = get().queryToTab[summary.queryId]
         if (!tabId) return
+        const connId = get().tabs.find(t => t.id === tabId)?.connId
         set(s => {
             const queryToTab = { ...s.queryToTab }
             delete queryToTab[summary.queryId]
@@ -409,6 +423,7 @@ export const useApp = create<AppState>((set, get) => ({
                 queries: { ...s.queries, [tabId]: { ...q, running: false, summary } },
             }
         })
+        if (summary.error && connId) get().markMaybeDisconnected(connId, summary.error)
     },
 
     reloadTable: async (tabId) => {
@@ -444,6 +459,7 @@ export const useApp = create<AppState>((set, get) => ({
             })
         } catch (err) {
             setView(set, tabId, { loading: false, error: String(err) })
+            get().markMaybeDisconnected(tab.connId, err)
         }
     },
 
@@ -566,6 +582,7 @@ export const useApp = create<AppState>((set, get) => ({
             })
         } catch (err) {
             setRedis(set, tabId, { loading: false, error: String(err) })
+            get().markMaybeDisconnected(tab.connId, err)
         }
     },
 
@@ -656,6 +673,12 @@ export const useApp = create<AppState>((set, get) => ({
     toggleHistory: (open) => {
         set({ historyOpen: open })
         if (open) get().loadHistory('')
+    },
+
+    markMaybeDisconnected: (connId, err) => {
+        if (looksDisconnected(String(err))) {
+            set(s => ({ connected: { ...s.connected, [connId]: false } }))
+        }
     },
 
     setError: (msg) => set({ lastError: msg }),

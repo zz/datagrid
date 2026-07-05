@@ -41,10 +41,11 @@ func (d *redisDriver) Connect(ctx context.Context, cfg *drivers.ConnectionConfig
 		port = 6379
 	}
 	base := &goredis.Options{
-		Addr:     fmt.Sprintf("%s:%d", cfg.Host, port),
-		Username: cfg.User, // ACL user; empty is fine for default
-		Password: opts.Password,
-		PoolSize: 4,
+		Addr:        fmt.Sprintf("%s:%d", cfg.Host, port),
+		Username:    cfg.User, // ACL user; empty is fine for default
+		Password:    opts.Password,
+		PoolSize:    4,
+		DialTimeout: 10 * time.Second, // fail fast if unreachable
 	}
 	// When an SSH tunnel is configured, route go-redis through its dialer.
 	if opts.Dialer != nil {

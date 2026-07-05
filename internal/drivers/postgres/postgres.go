@@ -53,6 +53,8 @@ func (d *pgDriver) Connect(ctx context.Context, cfg *drivers.ConnectionConfig, o
 	poolCfg.MaxConns = 5
 	poolCfg.MinConns = 0
 	poolCfg.MaxConnIdleTime = 5 * time.Minute
+	// Fail fast when the host is unreachable rather than hanging on the dial.
+	poolCfg.ConnConfig.ConnectTimeout = 10 * time.Second
 	if opts.Dialer != nil {
 		poolCfg.ConnConfig.DialFunc = opts.Dialer
 	}

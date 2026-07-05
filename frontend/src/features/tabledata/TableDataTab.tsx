@@ -14,7 +14,8 @@ import { displayValue } from '../../ipc/types'
 
 export default function TableDataTab({ tab }: { tab: Tab }) {
     const view = useApp(s => s.tableViews[tab.id])
-    const { setTableSort, setTablePage, stageEdit, stageInsert, stageDelete, discardEdits, applyEdits } = useApp()
+    const { setTableSort, setTablePage, stageEdit, stageInsert, stageDelete, discardEdits, applyEdits, reloadTable } =
+        useApp()
     const wrap = useRef<HTMLDivElement>(null)
     const [size, setSize] = useState({ w: 0, h: 0 })
     const [selectedRow, setSelectedRow] = useState<number | null>(null)
@@ -110,28 +111,43 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
                 )}
             </div>
 
-            {!editable && (
+            {/* Only warn about a missing key once the table info is actually
+                loaded — not while loading or after a failure. */}
+            {view.info && !editable && (
                 <div className="table-banner">
                     Read-only: this table has no primary or unique key, so edits can’t be targeted to a specific row.
                 </div>
             )}
-            {view.error && <div className="table-error">{view.error}</div>}
+            {view.error && (
+                <div className="table-error">
+                    <span>{view.error}</span>
+                    <button onClick={() => reloadTable(tab.id)}>Retry</button>
+                </div>
+            )}
 
             <div className="table-grid" ref={wrap}>
-                {size.w > 0 && view.columns.length > 0 && (
-                    <DataEditor
-                        width={size.w}
-                        height={size.h}
-                        columns={gridColumns}
-                        rows={view.rows.length}
-                        getCellContent={getCellContent}
-                        onCellEdited={onCellEdited}
-                        onHeaderClicked={colIdx => setTableSort(tab.id, view.columns[colIdx].name)}
-                        onGridSelectionChange={sel => setSelectedRow(sel.current?.cell[1] ?? null)}
-                        rowMarkers="both"
-                        smoothScrollX
-                        smoothScrollY
-                    />
+                {view.loading ? (
+                    <div className="grid-status">Loading…</div>
+                ) : view.error ? (
+                    <div className="grid-status error">Couldn’t load this table.</div>
+                ) : view.columns.length === 0 ? (
+                    <div className="grid-status">No data.</div>
+                ) : (
+                    size.w > 0 && (
+                        <DataEditor
+                            width={size.w}
+                            height={size.h}
+                            columns={gridColumns}
+                            rows={view.rows.length}
+                            getCellContent={getCellContent}
+                            onCellEdited={onCellEdited}
+                            onHeaderClicked={colIdx => setTableSort(tab.id, view.columns[colIdx].name)}
+                            onGridSelectionChange={sel => setSelectedRow(sel.current?.cell[1] ?? null)}
+                            rowMarkers="both"
+                            smoothScrollX
+                            smoothScrollY
+                        />
+                    )
                 )}
             </div>
 
