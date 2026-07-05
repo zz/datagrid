@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -111,19 +112,80 @@ func (m *Manager) Close() {
 	}
 }
 
-// dial opens an SSH client trying, in order: ssh-agent, key file, password.
+// dial opens an SSH client to cfg's host. Settings are resolved from the
+// user's ~/.ssh/config (HostName, User, Port, IdentityFile, ProxyJump), so a
+// user can enter just a host alias, and connections chain through any
+// configured ProxyJump bastions.
 func dial(ctx context.Context, cfg *drivers.SSHCfg, auth Auth) (*ssh.Client, error) {
-	var methods []ssh.AuthMethod
+	return connect(ctx, userConfigLookup(), cfg, auth, nil, 0)
+}
 
+// connect establishes an SSH client to sc, tunneling the underlying TCP
+// through `via` (a previous ProxyJump hop) when non-nil. It recurses to build
+// the jump chain resolved from ~/.ssh/config.
+func connect(ctx context.Context, lk *lookup, sc *drivers.SSHCfg, auth Auth, via *ssh.Client, depth int) (*ssh.Client, error) {
+	if depth > 10 {
+		return nil, fmt.Errorf("ssh ProxyJump chain too deep")
+	}
+	r := resolve(lk, sc)
+
+	// Establish each jump host in order; the last jump carries the TCP to sc.
+	for _, hop := range r.ProxyJump {
+		jc, err := connect(ctx, lk, parseJump(hop), auth, via, depth+1)
+		if err != nil {
+			return nil, fmt.Errorf("ssh proxy jump %q: %w", hop, err)
+		}
+		via = jc
+	}
+
+	methods := authMethods(r, auth)
+	if len(methods) == 0 {
+		return nil, fmt.Errorf("no usable SSH auth method for %s (agent, key file, or password)", r.Host)
+	}
+	clientCfg := &ssh.ClientConfig{
+		User: r.User,
+		Auth: methods,
+		// TODO(M5): verify against known_hosts with a trust-on-first-use
+		// prompt instead of accepting any host key.
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec
+		Timeout:         15 * time.Second,
+	}
+
+	addr := net.JoinHostPort(r.Host, strconv.Itoa(r.Port))
+	var conn net.Conn
+	var err error
+	if via == nil {
+		d := net.Dialer{Timeout: clientCfg.Timeout}
+		conn, err = d.DialContext(ctx, "tcp", addr)
+	} else {
+		// Tunnel the TCP for this hop through the previous jump's SSH client.
+		conn, err = via.Dial("tcp", addr)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("dial ssh host %s: %w", addr, err)
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("ssh handshake with %s: %w", addr, err)
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// authMethods builds the SSH auth list: ssh-agent first, then each identity
+// file that exists and parses, then a password. Missing/unparseable identity
+// files are skipped so config defaults don't hard-fail the connection.
+func authMethods(r resolved, auth Auth) []ssh.AuthMethod {
+	var methods []ssh.AuthMethod
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
 		if conn, err := net.Dial("unix", sock); err == nil {
 			methods = append(methods, ssh.PublicKeysCallback(agent.NewClient(conn).Signers))
 		}
 	}
-	if cfg.KeyPath != "" {
-		pem, err := os.ReadFile(cfg.KeyPath)
+	for _, path := range r.IdentityFiles {
+		pem, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("read ssh key: %w", err)
+			continue
 		}
 		var signer ssh.Signer
 		if auth.KeyPassphrase != "" {
@@ -132,39 +194,12 @@ func dial(ctx context.Context, cfg *drivers.SSHCfg, auth Auth) (*ssh.Client, err
 			signer, err = ssh.ParsePrivateKey(pem)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("parse ssh key: %w", err)
+			continue
 		}
 		methods = append(methods, ssh.PublicKeys(signer))
 	}
 	if auth.Password != "" {
 		methods = append(methods, ssh.Password(auth.Password))
 	}
-	if len(methods) == 0 {
-		return nil, fmt.Errorf("no usable SSH auth method (agent, key file, or password)")
-	}
-
-	port := cfg.Port
-	if port == 0 {
-		port = 22
-	}
-	clientCfg := &ssh.ClientConfig{
-		User: cfg.User,
-		Auth: methods,
-		// TODO(M5): verify against known_hosts with a trust-on-first-use
-		// prompt instead of accepting any host key.
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec
-		Timeout:         15 * time.Second,
-	}
-
-	d := net.Dialer{Timeout: clientCfg.Timeout}
-	conn, err := d.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", cfg.Host, port))
-	if err != nil {
-		return nil, fmt.Errorf("dial ssh host: %w", err)
-	}
-	c, chans, reqs, err := ssh.NewClientConn(conn, conn.RemoteAddr().String(), clientCfg)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("ssh handshake: %w", err)
-	}
-	return ssh.NewClient(c, chans, reqs), nil
+	return methods
 }

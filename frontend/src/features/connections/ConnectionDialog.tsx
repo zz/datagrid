@@ -19,7 +19,7 @@ const emptyForm = {
     colorTag: '',
     sshEnabled: false,
     sshHost: '',
-    sshPort: '22',
+    sshPort: '',
     sshUser: '',
     sshKeyPath: '',
 }
@@ -43,7 +43,8 @@ function toConfig(form: Form, id: string): drivers.ConnectionConfig {
         ssh: form.sshEnabled
             ? {
                   host: form.sshHost,
-                  port: parseInt(form.sshPort, 10) || 22,
+                  // 0 = inherit from ~/.ssh/config (or default to 22 backend-side).
+                  port: parseInt(form.sshPort, 10) || 0,
                   user: form.sshUser,
                   keyPath: form.sshKeyPath,
               }
@@ -70,7 +71,7 @@ export default function ConnectionDialog() {
                   colorTag: editing.colorTag || '',
                   sshEnabled: !!editing.ssh,
                   sshHost: editing.ssh?.host ?? '',
-                  sshPort: String(editing.ssh?.port || 22),
+                  sshPort: editing.ssh?.port ? String(editing.ssh.port) : '',
                   sshUser: editing.ssh?.user ?? '',
                   sshKeyPath: editing.ssh?.keyPath ?? '',
               }
@@ -180,25 +181,32 @@ export default function ConnectionDialog() {
                         />{' '}
                         Read-only{form.envLabel === 'prod' && ' (forced for prod)'}
                     </label>
-                    <span />
                     <label className="ssh-toggle">
                         <input type="checkbox" checked={form.sshEnabled} onChange={set('sshEnabled')} /> SSH tunnel
                     </label>
-                    <span />
                     {form.sshEnabled && (
                         <>
                             <label>SSH host</label>
-                            <input value={form.sshHost} onChange={set('sshHost')} />
+                            <input
+                                value={form.sshHost}
+                                onChange={set('sshHost')}
+                                placeholder="hostname or ~/.ssh/config alias"
+                            />
                             <label>SSH port</label>
-                            <input value={form.sshPort} onChange={set('sshPort')} />
+                            <input value={form.sshPort} onChange={set('sshPort')} placeholder="(from config, or 22)" />
                             <label>SSH user</label>
-                            <input value={form.sshUser} onChange={set('sshUser')} />
+                            <input value={form.sshUser} onChange={set('sshUser')} placeholder="(from config, or current user)" />
                             <label>SSH key file</label>
                             <input
                                 value={form.sshKeyPath}
                                 onChange={set('sshKeyPath')}
-                                placeholder="(empty = use ssh-agent)"
+                                placeholder="(from config / ssh-agent)"
                             />
+                            <span />
+                            <div className="ssh-config-hint">
+                                Enter a <code>~/.ssh/config</code> host alias to inherit HostName, User, Port,
+                                IdentityFile, and ProxyJump. Blank fields fall back to your ssh config.
+                            </div>
                         </>
                     )}
                 </div>
