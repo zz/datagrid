@@ -112,6 +112,24 @@ func (s *session) FetchCell(ref string) (*drivers.Value, bool) {
 	return s.cells.Get(ref)
 }
 
+// ListServerDatabases returns the non-template databases on the server.
+func (s *session) ListServerDatabases(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT datname FROM pg_database WHERE NOT datistemplate AND datallowconn ORDER BY datname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
 // AutocompleteMap returns "schema.table" → columns for the editor.
 func (s *session) AutocompleteMap(ctx context.Context) (map[string][]string, error) {
 	rows, err := s.pool.Query(ctx, `

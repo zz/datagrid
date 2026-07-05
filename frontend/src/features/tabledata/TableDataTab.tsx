@@ -9,7 +9,8 @@ import {
     Item,
 } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
-import { useApp, PAGE_SIZE, Tab } from '../../store'
+import { useApp, Tab } from '../../store'
+import { useSettings } from '../../settings'
 import type { Value } from '../../ipc/types'
 import { displayValue } from '../../ipc/types'
 import { drivers } from '../../../wailsjs/go/models'
@@ -24,6 +25,7 @@ const FILTER_OPS = ['contains', '=', '!=', '<', '>', '<=', '>=', 'starts']
 
 export default function TableDataTab({ tab }: { tab: Tab }) {
     const view = useApp(s => s.tableViews[tab.id])
+    const PAGE_SIZE = useSettings(s => s.pageSize)
     const {
         setTableSort,
         setTableFilters,

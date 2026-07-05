@@ -12,10 +12,15 @@ import HistoryPanel from './features/history/HistoryPanel'
 import GoToPalette from './features/navigation/GoToPalette'
 import ErrorBoundary from './components/ErrorBoundary'
 import CopyButton from './components/CopyButton'
+import SettingsDialog from './features/settings/SettingsDialog'
+import ConnectionManager from './features/connections/ConnectionManager'
+import { applyTheme, useSettings } from './settings'
 
 function App() {
     const [version, setVersion] = useState('')
     const [paletteOpen, setPaletteOpen] = useState(false)
+    const [settingsOpen, setSettingsOpen] = useState(false)
+    const [managerOpen, setManagerOpen] = useState(false)
     const {
         tabs,
         activeTabId,
@@ -32,6 +37,7 @@ function App() {
     } = useApp()
 
     useEffect(() => {
+        applyTheme(useSettings.getState().theme)
         GetAppInfo().then(info => setVersion(info.version))
         loadConnections()
         const offBatch = onQueryBatch(applyBatch)
@@ -86,6 +92,12 @@ function App() {
                         </div>
                     ))}
                     <span className="tabstrip-spacer" />
+                    <button className="history-toggle" title="Connection manager" onClick={() => setManagerOpen(true)}>
+                        ⛁ Connections
+                    </button>
+                    <button className="history-toggle" title="Settings" onClick={() => setSettingsOpen(true)}>
+                        ⚙
+                    </button>
                     <button className="history-toggle" title="Go to table (⌘P)" onClick={() => setPaletteOpen(true)}>
                         ⌕ Go to
                     </button>
@@ -137,6 +149,8 @@ function App() {
             </div>
             {historyOpen && <HistoryPanel />}
             {paletteOpen && <GoToPalette onClose={() => setPaletteOpen(false)} />}
+            {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+            {managerOpen && <ConnectionManager onClose={() => setManagerOpen(false)} />}
             {dialog.open && <ConnectionDialog key={dialog.editing?.id ?? 'new'} />}
         </div>
     )

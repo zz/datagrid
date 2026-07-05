@@ -165,6 +165,12 @@ type AutocompleteProvider interface {
 	AutocompleteMap(ctx context.Context) (map[string][]string, error)
 }
 
+// DatabaseLister is implemented by SQL sessions that can list the databases
+// on the server, for the connection's database switcher.
+type DatabaseLister interface {
+	ListServerDatabases(ctx context.Context) ([]string, error)
+}
+
 // Session is one live connection (backed by a pool for SQL engines).
 type Session interface {
 	Ping(ctx context.Context) error

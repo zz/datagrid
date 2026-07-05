@@ -191,6 +191,56 @@ func (a *App) Connect(connID string) error {
 	return nil
 }
 
+// ServerDatabases lists the databases on a connected SQL server, for the
+// database switcher.
+func (a *App) ServerDatabases(connID string) ([]string, error) {
+	os, err := a.session(connID)
+	if err != nil {
+		return nil, err
+	}
+	l, ok := os.session.(drivers.DatabaseLister)
+	if !ok {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+	defer cancel()
+	return l.ListServerDatabases(ctx)
+}
+
+// SwitchDatabase reconnects a connection to a different database on the same
+// server and persists the choice.
+func (a *App) SwitchDatabase(connID, database string) error {
+	a.mu.Lock()
+	cur, ok := a.sessions[connID]
+	a.mu.Unlock()
+	if !ok {
+		return errors.New("not connected")
+	}
+	cfg := cur.cfg
+	if cfg.Database == database {
+		return nil
+	}
+	cfg.Database = database
+	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	defer cancel()
+	sess, release, err := a.open(ctx, cfg, "")
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	old := a.sessions[connID]
+	a.sessions[connID] = &openSession{session: sess, cfg: cfg, release: release}
+	a.mu.Unlock()
+	if old != nil {
+		_ = old.session.Close()
+		if old.release != nil {
+			old.release()
+		}
+	}
+	_ = a.meta.SaveConnection(cfg) // persist the active database
+	return nil
+}
+
 // Disconnect closes the session for a connection, if open.
 func (a *App) Disconnect(connID string) error {
 	a.mu.Lock()

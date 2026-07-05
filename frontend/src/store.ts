@@ -24,11 +24,10 @@ import {
 import { drivers } from '../wailsjs/go/models'
 import { meta } from '../wailsjs/go/models'
 import type { Column, QuerySummary, RowBatch, Value } from './ipc/types'
+import { pageSize as settingsPageSize, rowLimit as settingsRowLimit } from './settings'
 
+// Fallback defaults; the effective values come from the settings store.
 export const PAGE_SIZE = 200
-
-// Default page cap (design §4): beyond this the UI should switch to
-// explicit paging rather than accumulate unbounded rows in the webview.
 export const MAX_ROWS = 10_000
 
 export interface QueryState {
@@ -370,7 +369,7 @@ export const useApp = create<AppState>((set, get) => ({
             queryToTab: { ...s.queryToTab, [queryId]: tabId },
         }))
         try {
-            await RunQuery(tab.connId, queryId, statement, MAX_ROWS)
+            await RunQuery(tab.connId, queryId, statement, settingsRowLimit())
         } catch (err) {
             set(s => ({
                 queries: {
@@ -446,8 +445,8 @@ export const useApp = create<AppState>((set, get) => ({
             whereRaw: view.whereRaw,
             sorts: view.sorts,
             filters: view.filters,
-            limit: PAGE_SIZE,
-            offset: view.page * PAGE_SIZE,
+            limit: settingsPageSize(),
+            offset: view.page * settingsPageSize(),
         })
         try {
             let info = view.info

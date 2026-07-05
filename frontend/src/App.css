@@ -1777,3 +1777,130 @@
     /* Indent grouped connections slightly under the header. */
     padding-left: 4px;
 }
+
+/* Settings dialog */
+
+.theme-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.theme-toggle button {
+    padding: 4px 14px;
+    border: none;
+    background: transparent;
+    color: var(--fg-dim);
+    font-size: 12px;
+}
+
+.theme-toggle button.on {
+    background-color: var(--accent);
+    color: white;
+}
+
+.settings-note {
+    margin: 12px 0 0;
+    font-size: 11px;
+    color: var(--fg-dim);
+}
+
+/* Connection manager */
+
+.conn-manager {
+    width: 820px;
+    max-width: 92vw;
+}
+
+.conn-manager-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.conn-manager-header h2 {
+    margin: 0;
+}
+
+.conn-manager-header .primary {
+    padding: 4px 12px;
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    background-color: var(--accent);
+    color: white;
+    font-size: 12px;
+}
+
+.conn-manager-table {
+    margin-top: 14px;
+    max-height: 60vh;
+    overflow: auto;
+}
+
+.conn-manager-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.conn-manager-table th {
+    text-align: left;
+    padding: 4px 8px;
+    color: var(--fg-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background-color: var(--bg);
+}
+
+.conn-manager-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--bg-tabstrip);
+    vertical-align: middle;
+}
+
+.conn-manager-table .cm-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.conn-manager-table .cm-mono {
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 12px;
+    color: var(--fg-dim);
+}
+
+.conn-manager-table select {
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg);
+    font-size: 12px;
+}
+
+.conn-manager-table .cm-actions {
+    display: flex;
+    gap: 4px;
+    justify-content: flex-end;
+}
+
+.conn-manager-table .cm-actions button {
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg);
+    font-size: 11px;
+}
+
+.conn-manager-table .cm-actions button.danger {
+    color: #ff453a;
+    border-color: #ff453a;
+}

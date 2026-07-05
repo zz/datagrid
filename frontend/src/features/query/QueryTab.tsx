@@ -5,7 +5,8 @@ import ResultsGrid from '../../components/ResultsGrid'
 import PlanTree from '../../components/PlanTree'
 import { ExplainQuery } from '../../../wailsjs/go/api/App'
 import { drivers } from '../../../wailsjs/go/models'
-import { useApp, MAX_ROWS, Tab } from '../../store'
+import { useApp, Tab } from '../../store'
+import { useSettings } from '../../settings'
 import { exportRows, ExportFormat } from '../../export'
 import CopyButton from '../../components/CopyButton'
 
@@ -22,6 +23,7 @@ export default function QueryTab({ tab }: { tab: Tab }) {
     const conn = useApp(s => s.connections.find(c => c.id === tab.connId))
     const schema = useApp(s => s.autocomplete[tab.connId])
     const { runQuery, cancelQuery, setTabSql, setError } = useApp()
+    const MAX_ROWS = useSettings(s => s.rowLimit)
     const [confirm, setConfirm] = useState<string | null>(null)
     const [plan, setPlan] = useState<drivers.PlanNode | null>(null)
 
