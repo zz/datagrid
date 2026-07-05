@@ -8,6 +8,7 @@ import {
     GetAutocomplete,
     ListConnections,
     ListHistory,
+    CountTableRows,
     LoadTableRows,
     OpenTable,
     PreviewChangeset,
@@ -101,12 +102,15 @@ export interface TableView {
     rows: Value[][]
     sorts: drivers.SortSpec[]
     filters: drivers.FilterSpec[]
+    whereRaw: string
+    total: number | null // total matching rows; null until counted
     page: number
     hasMore: boolean
     loading: boolean
     error: string | null
     edits: PendingEdit[]
     previews: string[]
+    colWidths: Record<string, number>
 }
 
 const emptyTableView = (): TableView => ({
@@ -115,12 +119,15 @@ const emptyTableView = (): TableView => ({
     rows: [],
     sorts: [],
     filters: [],
+    whereRaw: '',
+    total: null,
     page: 0,
     hasMore: false,
     loading: false,
     error: null,
     edits: [],
     previews: [],
+    colWidths: {},
 })
 
 const emptyQuery = (): QueryState => ({
@@ -168,10 +175,12 @@ interface AppState {
     applyBatch: (batch: RowBatch) => void
     applyDone: (summary: QuerySummary) => void
     // Table view actions:
-    reloadTable: (tabId: string) => Promise<void>
+    reloadTable: (tabId: string, recount?: boolean) => Promise<void>
     setTableSort: (tabId: string, column: string) => Promise<void>
     setTableFilters: (tabId: string, filters: drivers.FilterSpec[]) => Promise<void>
+    setTableWhere: (tabId: string, whereRaw: string) => Promise<void>
     setTablePage: (tabId: string, page: number) => Promise<void>
+    setColWidth: (tabId: string, column: string, width: number) => void
     stageEdit: (tabId: string, rowIndex: number, column: string, text: string, isNull: boolean) => void
     stageInsert: (tabId: string) => void
     stageDelete: (tabId: string, rowIndex: number) => void
@@ -296,7 +305,7 @@ export const useApp = create<AppState>((set, get) => ({
             activeTabId: tab.id,
             tableViews: { ...s.tableViews, [tab.id]: emptyTableView() },
         }))
-        await get().reloadTable(tab.id)
+        await get().reloadTable(tab.id, true)
     },
 
     openRedisTab: async (connId, db) => {
@@ -426,27 +435,26 @@ export const useApp = create<AppState>((set, get) => ({
         if (summary.error && connId) get().markMaybeDisconnected(connId, summary.error)
     },
 
-    reloadTable: async (tabId) => {
+    reloadTable: async (tabId, recount) => {
         const tab = get().tabs.find(t => t.id === tabId)
         const view = get().tableViews[tabId]
         if (!tab || tab.kind !== 'table' || !view) return
         setView(set, tabId, { loading: true, error: null })
+        const req = drivers.PageRequest.createFrom({
+            schema: tab.schema,
+            table: tab.table,
+            whereRaw: view.whereRaw,
+            sorts: view.sorts,
+            filters: view.filters,
+            limit: PAGE_SIZE,
+            offset: view.page * PAGE_SIZE,
+        })
         try {
             let info = view.info
             if (!info) {
                 info = await OpenTable(tab.connId, tab.schema!, tab.table!)
             }
-            const page = await LoadTableRows(
-                tab.connId,
-                drivers.PageRequest.createFrom({
-                    schema: tab.schema,
-                    table: tab.table,
-                    sorts: view.sorts,
-                    filters: view.filters,
-                    limit: PAGE_SIZE,
-                    offset: view.page * PAGE_SIZE,
-                }),
-            )
+            const page = await LoadTableRows(tab.connId, req)
             setView(set, tabId, {
                 info,
                 columns: page.columns ?? [],
@@ -457,10 +465,27 @@ export const useApp = create<AppState>((set, get) => ({
                 edits: [],
                 previews: [],
             })
+            // Recount when the filter set changed (not on every page turn).
+            if (recount) {
+                CountTableRows(tab.connId, req)
+                    .then(total => setView(set, tabId, { total }))
+                    .catch(() => setView(set, tabId, { total: null }))
+            }
         } catch (err) {
             setView(set, tabId, { loading: false, error: String(err) })
             get().markMaybeDisconnected(tab.connId, err)
         }
+    },
+
+    setTableWhere: async (tabId, whereRaw) => {
+        setView(set, tabId, { whereRaw, page: 0 })
+        await get().reloadTable(tabId, true)
+    },
+
+    setColWidth: (tabId, column, width) => {
+        const view = get().tableViews[tabId]
+        if (!view) return
+        setView(set, tabId, { colWidths: { ...view.colWidths, [column]: width } })
     },
 
     setTableSort: async (tabId, column) => {
@@ -482,7 +507,7 @@ export const useApp = create<AppState>((set, get) => ({
 
     setTableFilters: async (tabId, filters) => {
         setView(set, tabId, { filters, page: 0 })
-        await get().reloadTable(tabId)
+        await get().reloadTable(tabId, true)
     },
 
     setTablePage: async (tabId, page) => {

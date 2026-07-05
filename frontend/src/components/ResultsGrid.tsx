@@ -10,6 +10,9 @@ import '@glideapps/glide-data-grid/dist/index.css'
 import type { Column, Value } from '../ipc/types'
 import { displayValue } from '../ipc/types'
 import CellInspector from './CellInspector'
+import ContextMenu, { MenuItem } from './ContextMenu'
+import { Copy } from '../../wailsjs/go/api/App'
+import { toCSV } from '../export'
 
 interface Props {
     connId: string
@@ -22,6 +25,8 @@ export default function ResultsGrid({ connId, columns, rows }: Props) {
     const [size, setSize] = useState({ w: 0, h: 0 })
     const [inspect, setInspect] = useState<{ column: string; cell: Value } | null>(null)
     const [search, setSearch] = useState('')
+    const [widths, setWidths] = useState<Record<string, number>>({})
+    const [menu, setMenu] = useState<{ x: number; y: number; col: number; row: number } | null>(null)
 
     useEffect(() => {
         const el = wrap.current
@@ -46,8 +51,19 @@ export default function ResultsGrid({ connId, columns, rows }: Props) {
     const gridColumns: GridColumn[] = columns.map(c => ({
         id: c.name,
         title: c.name,
-        width: Math.min(Math.max(c.name.length * 9 + 24, 90), 260),
+        width: widths[c.name] ?? Math.min(Math.max(c.name.length * 9 + 24, 90), 260),
     }))
+
+    const cellMenuItems = (col: number, row: number): MenuItem[] => {
+        const cell = shownRows[row]?.[col]
+        const column = columns[col]?.name ?? ''
+        const text = !cell || cell.t === 'null' ? '' : displayValue(cell)
+        return [
+            { label: 'Copy value', onClick: () => Copy(text) },
+            { label: 'Copy row (CSV)', onClick: () => Copy(toCSV(columns, [shownRows[row] ?? []])) },
+            { label: 'Inspect value…', onClick: () => setInspect({ column, cell: cell ?? { t: 'null' } }) },
+        ]
+    }
 
     const getCellContent = useCallback(
         ([col, row]: Item): GridCell => {
@@ -111,6 +127,17 @@ export default function ResultsGrid({ connId, columns, rows }: Props) {
                         rows={shownRows.length}
                         getCellContent={getCellContent}
                         onCellActivated={onCellActivated}
+                        onColumnResize={(col, newSize) => setWidths(w => ({ ...w, [col.id ?? '']: newSize }))}
+                        onCellContextMenu={([col, row], e) => {
+                            e.preventDefault()
+                            const rect = wrap.current?.getBoundingClientRect()
+                            setMenu({
+                                x: (rect?.left ?? 0) + e.bounds.x + e.localEventX,
+                                y: (rect?.top ?? 0) + e.bounds.y + e.localEventY,
+                                col,
+                                row,
+                            })
+                        }}
                         rowMarkers="number"
                         smoothScrollX
                         smoothScrollY
@@ -118,6 +145,9 @@ export default function ResultsGrid({ connId, columns, rows }: Props) {
                     />
                 )}
             </div>
+            {menu && (
+                <ContextMenu x={menu.x} y={menu.y} items={cellMenuItems(menu.col, menu.row)} onClose={() => setMenu(null)} />
+            )}
             {inspect && (
                 <CellInspector
                     connId={connId}

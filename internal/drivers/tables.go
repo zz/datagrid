@@ -34,12 +34,16 @@ type FilterSpec struct {
 
 // PageRequest describes a page of table data to read.
 type PageRequest struct {
-	Schema  string       `json:"schema"`
-	Table   string       `json:"table"`
-	Sorts   []SortSpec   `json:"sorts"`
-	Filters []FilterSpec `json:"filters"`
-	Limit   int          `json:"limit"`
-	Offset  int          `json:"offset"`
+	Schema string `json:"schema"`
+	Table  string `json:"table"`
+	// WhereRaw is a raw SQL boolean expression (the user's own filter, e.g.
+	// "id > 100 AND created_at > '1999-01-01'"), ANDed with any structured
+	// Filters. Inlined, not parameterized — same trust model as the console.
+	WhereRaw string       `json:"whereRaw"`
+	Sorts    []SortSpec   `json:"sorts"`
+	Filters  []FilterSpec `json:"filters"`
+	Limit    int          `json:"limit"`
+	Offset   int          `json:"offset"`
 }
 
 // Page is a synchronously-returned page of table rows.
@@ -83,6 +87,9 @@ type ChangesetResult struct {
 type TableEditor interface {
 	TableInfo(ctx context.Context, schema, table string) (*TableInfo, error)
 	ReadPage(ctx context.Context, req PageRequest) (*Page, error)
+	// CountRows returns the total matching rows for a request's filters, used
+	// to enable last-page navigation and show a total.
+	CountRows(ctx context.Context, req PageRequest) (int64, error)
 	// PreviewChanges returns the generated SQL for a changeset without
 	// executing it, so the UI can show it before the user applies.
 	PreviewChanges(ctx context.Context, req ChangesetRequest) ([]string, error)

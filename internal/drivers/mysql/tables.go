@@ -158,6 +158,18 @@ func (s *session) PreviewChanges(ctx context.Context, req drivers.ChangesetReque
 	return previews, nil
 }
 
+func (s *session) CountRows(ctx context.Context, req drivers.PageRequest) (int64, error) {
+	sqlText, args, err := dialect.BuildCount(req)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	if err := s.db.QueryRowContext(ctx, sqlText, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *session) ApplyChanges(ctx context.Context, req drivers.ChangesetRequest) (*drivers.ChangesetResult, error) {
 	info, err := s.TableInfo(ctx, req.Schema, req.Table)
 	if err != nil {

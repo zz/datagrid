@@ -13,9 +13,12 @@ import { useApp, PAGE_SIZE, Tab } from '../../store'
 import type { Value } from '../../ipc/types'
 import { displayValue } from '../../ipc/types'
 import { drivers } from '../../../wailsjs/go/models'
-import { exportRows, ExportFormat } from '../../export'
+import { Copy } from '../../../wailsjs/go/api/App'
+import { exportRows, ExportFormat, toCSV } from '../../export'
 import ImportDialog from './ImportDialog'
 import CopyButton from '../../components/CopyButton'
+import ContextMenu, { MenuItem } from '../../components/ContextMenu'
+import CellInspector from '../../components/CellInspector'
 
 const FILTER_OPS = ['contains', '=', '!=', '<', '>', '<=', '>=', 'starts']
 
@@ -24,7 +27,9 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
     const {
         setTableSort,
         setTableFilters,
+        setTableWhere,
         setTablePage,
+        setColWidth,
         stageEdit,
         stageInsert,
         stageDelete,
@@ -39,6 +44,9 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
     const [search, setSearch] = useState('')
     const [fillValue, setFillValue] = useState('')
     const [showImport, setShowImport] = useState(false)
+    const [whereDraft, setWhereDraft] = useState('')
+    const [menu, setMenu] = useState<{ x: number; y: number; col: number; row: number } | null>(null)
+    const [inspect, setInspect] = useState<{ column: string; cell: Value } | null>(null)
     // Filter-bar draft.
     const [fCol, setFCol] = useState('')
     const [fOp, setFOp] = useState('contains')
@@ -111,12 +119,18 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
     const gridColumns: GridColumn[] = view.columns.map(c => {
         const sort = view.sorts.find(s => s.column === c.name)
         const arrow = sort ? (sort.desc ? ' ↓' : ' ↑') : ''
-        return { id: c.name, title: c.name + arrow, width: Math.min(Math.max(c.name.length * 9 + 30, 90), 280) }
+        const width = view.colWidths[c.name] ?? Math.min(Math.max(c.name.length * 9 + 30, 90), 280)
+        return { id: c.name, title: c.name + arrow, width }
     })
 
     const dirty = view.edits.length > 0
     const range = selection?.current?.range
     const selCount = range ? range.width * range.height : 0
+
+    // Pagination with a known total (from CountRows) enables last-page jump.
+    const lastPage = view.total != null ? Math.max(0, Math.ceil(view.total / PAGE_SIZE) - 1) : null
+    const rangeStart = view.rows.length === 0 ? 0 : view.page * PAGE_SIZE + 1
+    const rangeEnd = view.page * PAGE_SIZE + view.rows.length
 
     const deleteSelected = () => {
         if (range) {
@@ -155,6 +169,32 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
         }
     }
 
+    // Right-click menu for a grid cell.
+    const cellMenuItems = (col: number, row: number): MenuItem[] => {
+        const cell = shownRows[row]?.[col]
+        const column = view.columns[col]?.name ?? ''
+        const colInfo = view.info?.columns.find(c => c.name === column)
+        const cellText = !cell || cell.t === 'null' ? '' : displayValue(cell)
+        const rowCSV = () => toCSV(view.columns, [shownRows[row] ?? []])
+        const items: MenuItem[] = [
+            { label: 'Copy value', onClick: () => Copy(cellText) },
+            { label: 'Copy row (CSV)', onClick: () => Copy(rowCSV()) },
+            { label: 'Inspect value…', onClick: () => setInspect({ column, cell: cell ?? { t: 'null' } }) },
+        ]
+        if (editable) {
+            items.push(
+                { label: '', onClick: () => {}, separator: true },
+                {
+                    label: 'Set NULL',
+                    disabled: !colInfo?.nullable,
+                    onClick: () => stageEdit(tab.id, shownIndex[row], column, '', true),
+                },
+                { label: 'Delete row', danger: true, onClick: () => stageDelete(tab.id, shownIndex[row]) },
+            )
+        }
+        return items
+    }
+
     return (
         <div className="table-tab">
             <div className="table-toolbar">
@@ -168,14 +208,25 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
                     ⤒ Import
                 </button>
                 <span className="tb-sep" />
+                <button onClick={() => setTablePage(tab.id, 0)} disabled={view.page === 0 || view.loading} title="First page">
+                    « First
+                </button>
                 <button onClick={() => setTablePage(tab.id, view.page - 1)} disabled={view.page === 0 || view.loading}>
                     ‹ Prev
                 </button>
                 <span className="tb-page">
-                    rows {view.page * PAGE_SIZE + 1}–{view.page * PAGE_SIZE + view.rows.length}
+                    {rangeStart.toLocaleString()}–{rangeEnd.toLocaleString()}
+                    {view.total != null && ` of ${view.total.toLocaleString()}`}
                 </span>
                 <button onClick={() => setTablePage(tab.id, view.page + 1)} disabled={!view.hasMore || view.loading}>
                     Next ›
+                </button>
+                <button
+                    onClick={() => lastPage != null && setTablePage(tab.id, lastPage)}
+                    disabled={lastPage == null || view.page >= lastPage || view.loading}
+                    title="Last page"
+                >
+                    Last »
                 </button>
                 <span className="tb-sep" />
                 <button onClick={() => doExport('csv')} title="Export page as CSV">
@@ -197,6 +248,28 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
             </div>
 
             <div className="table-filterbar">
+                <span className="where-label">WHERE</span>
+                <input
+                    className="where-input"
+                    placeholder="SQL filter, e.g. id > 100 AND created_at > '1999-01-01'"
+                    value={whereDraft}
+                    onChange={e => setWhereDraft(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && setTableWhere(tab.id, whereDraft)}
+                    spellCheck={false}
+                />
+                <button onClick={() => setTableWhere(tab.id, whereDraft)}>Apply</button>
+                {view.whereRaw && (
+                    <button
+                        onClick={() => {
+                            setWhereDraft('')
+                            setTableWhere(tab.id, '')
+                        }}
+                        title="Clear WHERE"
+                    >
+                        Clear
+                    </button>
+                )}
+                <span className="tb-sep" />
                 <input
                     className="grid-search"
                     placeholder="🔍 Search page…"
@@ -280,6 +353,17 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
                             getCellContent={getCellContent}
                             onCellEdited={onCellEdited}
                             onHeaderClicked={colIdx => setTableSort(tab.id, view.columns[colIdx].name)}
+                            onColumnResize={(col, newSize) => setColWidth(tab.id, col.id ?? '', newSize)}
+                            onCellContextMenu={([col, row], e) => {
+                                e.preventDefault()
+                                const rect = wrap.current?.getBoundingClientRect()
+                                setMenu({
+                                    x: (rect?.left ?? 0) + e.bounds.x + e.localEventX,
+                                    y: (rect?.top ?? 0) + e.bounds.y + e.localEventY,
+                                    col,
+                                    row,
+                                })
+                            }}
                             gridSelection={selection}
                             onGridSelectionChange={setSelection}
                             rowMarkers="both"
@@ -298,6 +382,10 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
                 </div>
             )}
 
+            {menu && <ContextMenu x={menu.x} y={menu.y} items={cellMenuItems(menu.col, menu.row)} onClose={() => setMenu(null)} />}
+            {inspect && (
+                <CellInspector connId={tab.connId} column={inspect.column} cell={inspect.cell} onClose={() => setInspect(null)} />
+            )}
             {showImport && <ImportDialog tab={tab} onClose={() => setShowImport(false)} />}
         </div>
     )

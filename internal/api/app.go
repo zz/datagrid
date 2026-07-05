@@ -315,6 +315,18 @@ func (a *App) LoadTableRows(connID string, req drivers.PageRequest) (*drivers.Pa
 	return te.ReadPage(ctx, req)
 }
 
+// CountTableRows returns the total matching rows for the current filters,
+// so the UI can jump to the last page and show a total.
+func (a *App) CountTableRows(connID string, req drivers.PageRequest) (int64, error) {
+	te, _, err := a.tableEditor(connID)
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
+	defer cancel()
+	return te.CountRows(ctx, req)
+}
+
 // PreviewChangeset returns the generated SQL for pending edits without
 // touching the database.
 func (a *App) PreviewChangeset(connID string, req drivers.ChangesetRequest) ([]string, error) {

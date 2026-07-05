@@ -38,26 +38,12 @@ func (d Dialect) BuildSelectPage(req PageRequest) (string, []any, error) {
 	sb.WriteString("SELECT * FROM ")
 	sb.WriteString(d.qualified(req.Schema, req.Table))
 
-	if len(req.Filters) > 0 {
-		conds := make([]string, 0, len(req.Filters))
-		for _, f := range req.Filters {
-			op, ok := filterOps[f.Op]
-			if !ok {
-				return "", nil, fmt.Errorf("unsupported filter op %q", f.Op)
-			}
-			val := f.Value
-			switch f.Op {
-			case "contains":
-				val = "%" + f.Value + "%"
-			case "starts":
-				val = f.Value + "%"
-			}
-			conds = append(conds, fmt.Sprintf("%s %s %s", d.Quote(f.Column), op, next()))
-			args = append(args, val)
-		}
-		sb.WriteString(" WHERE ")
-		sb.WriteString(strings.Join(conds, " AND "))
+	where, wargs, err := d.whereClause(req, next)
+	if err != nil {
+		return "", nil, err
 	}
+	sb.WriteString(where)
+	args = append(args, wargs...)
 
 	if len(req.Sorts) > 0 {
 		terms := make([]string, 0, len(req.Sorts))
@@ -85,6 +71,47 @@ func (d Dialect) BuildSelectPage(req PageRequest) (string, []any, error) {
 		args = append(args, req.Offset)
 	}
 	return sb.String(), args, nil
+}
+
+// whereClause builds the shared WHERE for page and count queries: the raw
+// user expression (if any) ANDed with the structured filters. next() is the
+// caller's placeholder counter so params continue correctly.
+func (d Dialect) whereClause(req PageRequest, next func() string) (string, []any, error) {
+	var conds []string
+	var args []any
+	if raw := strings.TrimSpace(req.WhereRaw); raw != "" {
+		conds = append(conds, "("+raw+")")
+	}
+	for _, f := range req.Filters {
+		op, ok := filterOps[f.Op]
+		if !ok {
+			return "", nil, fmt.Errorf("unsupported filter op %q", f.Op)
+		}
+		val := f.Value
+		switch f.Op {
+		case "contains":
+			val = "%" + f.Value + "%"
+		case "starts":
+			val = f.Value + "%"
+		}
+		conds = append(conds, fmt.Sprintf("%s %s %s", d.Quote(f.Column), op, next()))
+		args = append(args, val)
+	}
+	if len(conds) == 0 {
+		return "", nil, nil
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args, nil
+}
+
+// BuildCount builds a COUNT(*) with the same filters as the page query.
+func (d Dialect) BuildCount(req PageRequest) (string, []any, error) {
+	n := 0
+	next := func() string { n++; return d.Param(n) }
+	where, args, err := d.whereClause(req, next)
+	if err != nil {
+		return "", nil, err
+	}
+	return "SELECT COUNT(*) FROM " + d.qualified(req.Schema, req.Table) + where, args, nil
 }
 
 // Statement is one generated changeset statement: a preview with inlined

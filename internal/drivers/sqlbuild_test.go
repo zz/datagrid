@@ -42,6 +42,45 @@ func TestBuildSelectPage(t *testing.T) {
 	}
 }
 
+func TestBuildSelectPageRawWhere(t *testing.T) {
+	sql, args, err := pgLike.BuildSelectPage(PageRequest{
+		Schema:   "app",
+		Table:    "users",
+		WhereRaw: "id > 100 AND active",
+		Filters:  []FilterSpec{{Column: "email", Op: "contains", Value: "bob"}},
+		Limit:    50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Raw expression is parenthesized and ANDed before structured filters;
+	// structured params still start at $1.
+	want := `SELECT * FROM "app"."users" WHERE (id > 100 AND active) AND "email" LIKE $1 LIMIT $2`
+	if sql != want {
+		t.Errorf("sql:\n got %s\nwant %s", sql, want)
+	}
+	if len(args) != 2 || args[0] != "%bob%" || args[1] != 50 {
+		t.Errorf("args = %v", args)
+	}
+}
+
+func TestBuildCount(t *testing.T) {
+	sql, args, err := pgLike.BuildCount(PageRequest{
+		Schema:   "app",
+		Table:    "users",
+		WhereRaw: "id > 100",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sql != `SELECT COUNT(*) FROM "app"."users" WHERE (id > 100)` {
+		t.Errorf("count sql: %s", sql)
+	}
+	if len(args) != 0 {
+		t.Errorf("args = %v", args)
+	}
+}
+
 func TestBuildSelectPageRejectsBadOp(t *testing.T) {
 	_, _, err := pgLike.BuildSelectPage(PageRequest{
 		Table:   "t",
