@@ -18,6 +18,7 @@ const emptyForm = {
     envLabel: 'dev',
     readOnly: false,
     colorTag: '',
+    group: '',
     sshEnabled: false,
     sshHost: '',
     sshPort: '',
@@ -41,6 +42,7 @@ function toConfig(form: Form, id: string): drivers.ConnectionConfig {
         readOnly: form.readOnly || form.envLabel === 'prod',
         envLabel: form.envLabel,
         colorTag: form.colorTag,
+        group: form.group.trim(),
         ssh: form.sshEnabled
             ? {
                   host: form.sshHost,
@@ -54,8 +56,9 @@ function toConfig(form: Form, id: string): drivers.ConnectionConfig {
 }
 
 export default function ConnectionDialog() {
-    const { dialog, closeDialog, loadConnections } = useApp()
+    const { dialog, closeDialog, loadConnections, connections } = useApp()
     const editing = dialog.editing
+    const groups = [...new Set(connections.map(c => c.group).filter(Boolean))]
     const [form, setForm] = useState<Form>(() =>
         editing
             ? {
@@ -70,6 +73,7 @@ export default function ConnectionDialog() {
                   envLabel: editing.envLabel || 'dev',
                   readOnly: editing.readOnly,
                   colorTag: editing.colorTag || '',
+                  group: editing.group || '',
                   sshEnabled: !!editing.ssh,
                   sshHost: editing.ssh?.host ?? '',
                   sshPort: editing.ssh?.port ? String(editing.ssh.port) : '',
@@ -133,6 +137,18 @@ export default function ConnectionDialog() {
                     </select>
                     <label>Name</label>
                     <input value={form.name} onChange={set('name')} placeholder="My database" />
+                    <label>Group</label>
+                    <input
+                        value={form.group}
+                        onChange={set('group')}
+                        placeholder="(optional folder)"
+                        list="conn-groups"
+                    />
+                    <datalist id="conn-groups">
+                        {groups.map(g => (
+                            <option key={g} value={g} />
+                        ))}
+                    </datalist>
                     <label>Host</label>
                     <input value={form.host} onChange={set('host')} />
                     <label>Port</label>

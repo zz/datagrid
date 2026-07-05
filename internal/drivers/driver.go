@@ -38,6 +38,7 @@ type ConnectionConfig struct {
 	ReadOnly bool    `json:"readOnly"`
 	EnvLabel string  `json:"envLabel"` // dev | staging | prod
 	ColorTag string  `json:"colorTag"`
+	Group    string  `json:"group"` // sidebar folder; empty = ungrouped
 }
 
 // SSHCfg configures an optional SSH tunnel for a connection.
