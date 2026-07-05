@@ -9,10 +9,12 @@ import QueryTab from './features/query/QueryTab'
 import TableDataTab from './features/tabledata/TableDataTab'
 import RedisTab from './features/redis/RedisTab'
 import HistoryPanel from './features/history/HistoryPanel'
+import GoToPalette from './features/navigation/GoToPalette'
 import ErrorBoundary from './components/ErrorBoundary'
 
 function App() {
     const [version, setVersion] = useState('')
+    const [paletteOpen, setPaletteOpen] = useState(false)
     const {
         tabs,
         activeTabId,
@@ -33,9 +35,18 @@ function App() {
         loadConnections()
         const offBatch = onQueryBatch(applyBatch)
         const offDone = onQueryDone(applyDone)
+        // ⌘P / Ctrl+P opens the go-to-table palette (design: Navigation).
+        const onKey = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
+                e.preventDefault()
+                setPaletteOpen(o => !o)
+            }
+        }
+        window.addEventListener('keydown', onKey)
         return () => {
             offBatch()
             offDone()
+            window.removeEventListener('keydown', onKey)
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
@@ -74,6 +85,9 @@ function App() {
                         </div>
                     ))}
                     <span className="tabstrip-spacer" />
+                    <button className="history-toggle" title="Go to table (⌘P)" onClick={() => setPaletteOpen(true)}>
+                        ⌕ Go to
+                    </button>
                     <button
                         className={`history-toggle ${historyOpen ? 'active' : ''}`}
                         title="Query history"
@@ -113,6 +127,7 @@ function App() {
                 </div>
             </div>
             {historyOpen && <HistoryPanel />}
+            {paletteOpen && <GoToPalette onClose={() => setPaletteOpen(false)} />}
             {dialog.open && <ConnectionDialog key={dialog.editing?.id ?? 'new'} />}
         </div>
     )

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -332,7 +333,34 @@ func (a *App) ApplyChangeset(connID string, req drivers.ChangesetRequest) (*driv
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
 	defer cancel()
-	return te.ApplyChanges(ctx, req)
+	result, err := te.ApplyChanges(ctx, req)
+	// Record applied statements to history so they appear in the SQL log.
+	if err == nil && result != nil {
+		now := time.Now()
+		for _, sqlText := range result.Previews {
+			_ = a.meta.RecordHistory(connID, sqlText, now, 0, result.RowsAffected, "")
+		}
+	}
+	return result, err
+}
+
+// SaveTextFile prompts for a location and writes content there. Used by the
+// data exporters. Returns the chosen path, or "" if the user cancelled.
+func (a *App) SaveTextFile(defaultName, content string) (string, error) {
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		DefaultFilename: defaultName,
+		Title:           "Export data",
+	})
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", nil // user cancelled
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // --- Redis (design §4/§6) ----------------------------------------------

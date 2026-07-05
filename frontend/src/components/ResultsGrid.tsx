@@ -21,6 +21,7 @@ export default function ResultsGrid({ connId, columns, rows }: Props) {
     const wrap = useRef<HTMLDivElement>(null)
     const [size, setSize] = useState({ w: 0, h: 0 })
     const [inspect, setInspect] = useState<{ column: string; cell: Value } | null>(null)
+    const [search, setSearch] = useState('')
 
     useEffect(() => {
         const el = wrap.current
@@ -33,6 +34,15 @@ export default function ResultsGrid({ connId, columns, rows }: Props) {
         return () => ro.disconnect()
     }, [])
 
+    // Text search filters the loaded rows to those with a cell containing the
+    // query (case-insensitive) — DataGrip-style find within the result set.
+    const shownRows =
+        search.trim() === ''
+            ? rows
+            : rows.filter(r =>
+                  r.some(c => c && c.t !== 'null' && String(c.v ?? '').toLowerCase().includes(search.toLowerCase())),
+              )
+
     const gridColumns: GridColumn[] = columns.map(c => ({
         id: c.name,
         title: c.name,
@@ -41,7 +51,7 @@ export default function ResultsGrid({ connId, columns, rows }: Props) {
 
     const getCellContent = useCallback(
         ([col, row]: Item): GridCell => {
-            const cell = rows[row]?.[col]
+            const cell = shownRows[row]?.[col]
             if (!cell) {
                 return { kind: GridCellKind.Text, data: '', displayData: '', allowOverlay: false }
             }
@@ -64,35 +74,50 @@ export default function ResultsGrid({ connId, columns, rows }: Props) {
                 themeOverride: cell.t === 'null' ? { textDark: '#8a8a90' } : undefined,
             }
         },
-        [rows],
+        [shownRows],
     )
 
     // Double-clicking a cell opens the inspector — the only way to read a
     // truncated oversized value in full.
     const onCellActivated = useCallback(
         ([col, row]: Item) => {
-            const cell = rows[row]?.[col]
+            const cell = shownRows[row]?.[col]
             if (cell) setInspect({ column: columns[col]?.name ?? '', cell })
         },
-        [rows, columns],
+        [shownRows, columns],
     )
 
     return (
-        <div className="results-grid" ref={wrap}>
-            {size.w > 0 && columns.length > 0 && (
-                <DataEditor
-                    width={size.w}
-                    height={size.h}
-                    columns={gridColumns}
-                    rows={rows.length}
-                    getCellContent={getCellContent}
-                    onCellActivated={onCellActivated}
-                    rowMarkers="number"
-                    smoothScrollX
-                    smoothScrollY
-                    getCellsForSelection={true}
+        <div className="results-grid-wrap">
+            <div className="grid-searchbar">
+                <input
+                    className="grid-search"
+                    placeholder="🔍 Search results…"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
                 />
-            )}
+                {search && (
+                    <span className="grid-search-count">
+                        {shownRows.length.toLocaleString()} of {rows.length.toLocaleString()}
+                    </span>
+                )}
+            </div>
+            <div className="results-grid" ref={wrap}>
+                {size.w > 0 && columns.length > 0 && (
+                    <DataEditor
+                        width={size.w}
+                        height={size.h}
+                        columns={gridColumns}
+                        rows={shownRows.length}
+                        getCellContent={getCellContent}
+                        onCellActivated={onCellActivated}
+                        rowMarkers="number"
+                        smoothScrollX
+                        smoothScrollY
+                        getCellsForSelection={true}
+                    />
+                )}
+            </div>
             {inspect && (
                 <CellInspector
                     connId={connId}
@@ -104,3 +129,5 @@ export default function ResultsGrid({ connId, columns, rows }: Props) {
         </div>
     )
 }
+
+// results-grid-wrap wraps the search bar + grid; keep the grid filling the rest.

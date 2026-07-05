@@ -9,7 +9,9 @@ interface Props {
     // "schema.table" → columns; fed into dialect-aware autocomplete.
     schema?: Record<string, string[]>
     defaultSchema?: string
-    initialSql: string
+    // Source-of-truth content. The editor owns typing, but external changes
+    // (Format, load-from-history) are pushed in when they differ from the doc.
+    value: string
     onChange: (sql: string) => void
     // Run the current selection if any, else the whole document (⌘⏎).
     onRun: (statement: string) => void
@@ -23,7 +25,7 @@ function sqlExtension({ engine, schema, defaultSchema }: Pick<Props, 'engine' | 
     })
 }
 
-export default function SqlEditor({ engine, schema, defaultSchema, initialSql, onChange, onRun }: Props) {
+export default function SqlEditor({ engine, schema, defaultSchema, value, onChange, onRun }: Props) {
     const host = useRef<HTMLDivElement>(null)
     const view = useRef<EditorView | null>(null)
     const langCompartment = useRef(new Compartment())
@@ -40,7 +42,7 @@ export default function SqlEditor({ engine, schema, defaultSchema, initialSql, o
             return true
         }
         const ed = new EditorView({
-            doc: initialSql,
+            doc: value,
             parent: host.current,
             extensions: [
                 basicSetup,
@@ -57,10 +59,22 @@ export default function SqlEditor({ engine, schema, defaultSchema, initialSql, o
         })
         view.current = ed
         return () => ed.destroy()
-        // The editor owns the document after mount; initialSql is only the
-        // seed, and schema updates arrive via the compartment below.
+        // The editor owns the document after mount; `value` seeds it and the
+        // sync effect below reconciles external changes.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
+
+    // Push external value changes (Format, load-from-history) into the doc,
+    // but only when they differ — so this never fights the user's typing
+    // (typing updates `value` via onChange, keeping them equal).
+    useEffect(() => {
+        const ed = view.current
+        if (!ed) return
+        const current = ed.state.doc.toString()
+        if (current !== value) {
+            ed.dispatch({ changes: { from: 0, to: current.length, insert: value } })
+        }
+    }, [value])
 
     // Swap the SQL extension in place when the schema map (or engine) changes.
     useEffect(() => {

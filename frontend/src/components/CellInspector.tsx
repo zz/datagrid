@@ -26,7 +26,13 @@ export default function CellInspector({ connId, column, cell, onClose }: Props) 
             .finally(() => setLoading(false))
     }, [connId, cell.ref])
 
-    const text = cell.ref ? (full ?? '') : cell.t === 'null' ? 'NULL' : displayValue(cell)
+    const raw = cell.ref ? (full ?? '') : cell.t === 'null' ? 'NULL' : displayValue(cell)
+    const [formatted, setFormatted] = useState(false)
+
+    // Formatted view pretty-prints JSON (and JSON-in-a-string); falls back to
+    // the raw text when it isn't parseable.
+    const canFormat = cell.t === 'json' || looksJSON(raw)
+    const shown = formatted && canFormat ? tryFormat(raw) : raw
 
     return (
         <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
@@ -35,15 +41,38 @@ export default function CellInspector({ connId, column, cell, onClose }: Props) 
                     <span className="cell-inspector-col">{column}</span>
                     <span className="cell-inspector-type">{cell.t}</span>
                     {cell.ref && <span className="cell-inspector-full">full value</span>}
+                    {canFormat && (
+                        <div className="cell-inspector-toggle">
+                            <button className={formatted ? '' : 'on'} onClick={() => setFormatted(false)}>
+                                Raw
+                            </button>
+                            <button className={formatted ? 'on' : ''} onClick={() => setFormatted(true)}>
+                                Formatted
+                            </button>
+                        </div>
+                    )}
                     <button className="icon-btn" onClick={onClose} title="Close">
                         ×
                     </button>
                 </div>
                 {loading && <div className="cell-inspector-status">Loading full value…</div>}
                 {error && <div className="cell-inspector-status error">{error}</div>}
-                <pre className="cell-inspector-body">{text}</pre>
-                <div className="cell-inspector-footer">{text.length.toLocaleString()} chars</div>
+                <pre className="cell-inspector-body">{shown}</pre>
+                <div className="cell-inspector-footer">{shown.length.toLocaleString()} chars</div>
             </div>
         </div>
     )
+}
+
+function looksJSON(s: string): boolean {
+    const t = s.trim()
+    return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))
+}
+
+function tryFormat(s: string): string {
+    try {
+        return JSON.stringify(JSON.parse(s), null, 2)
+    } catch {
+        return s
+    }
 }

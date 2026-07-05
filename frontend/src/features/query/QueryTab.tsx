@@ -1,10 +1,12 @@
 import { useState } from 'react'
+import { format as formatSql } from 'sql-formatter'
 import SqlEditor from '../../components/SqlEditor'
 import ResultsGrid from '../../components/ResultsGrid'
 import PlanTree from '../../components/PlanTree'
 import { ExplainQuery } from '../../../wailsjs/go/api/App'
 import { drivers } from '../../../wailsjs/go/models'
 import { useApp, MAX_ROWS, Tab } from '../../store'
+import { exportRows, ExportFormat } from '../../export'
 
 // Flags UPDATE/DELETE that lack a WHERE clause — these hit every row
 // (design §5: warn regardless of the connection's environment label).
@@ -48,6 +50,22 @@ export default function QueryTab({ tab }: { tab: Tab }) {
         runQuery(tab.id, statement)
     }
 
+    const format = () => {
+        try {
+            setTabSql(tab.id, formatSql(tab.sql, { language: engine === 'mysql' ? 'mysql' : 'postgresql' }))
+        } catch (err) {
+            setError(String(err))
+        }
+    }
+
+    const doExport = async (fmt: ExportFormat) => {
+        try {
+            await exportRows(`${conn?.name ?? 'query'}-result`, fmt, q.columns, q.rows)
+        } catch (err) {
+            setError(String(err))
+        }
+    }
+
     const statusLine = () => {
         if (q.running) return `Running… ${q.rows.length.toLocaleString()} rows`
         const s = q.summary
@@ -72,14 +90,28 @@ export default function QueryTab({ tab }: { tab: Tab }) {
                 <button disabled={q.running} onClick={explain} title="Show the query plan">
                     ⋔ Explain
                 </button>
+                <button onClick={format} title="Format SQL">
+                    ✦ Format
+                </button>
                 <span className={`query-status ${q.summary?.error ? 'error' : ''}`}>{statusLine()}</span>
+                {q.columns.length > 0 && (
+                    <>
+                        <span className="tb-spacer" />
+                        <button onClick={() => doExport('csv')} title="Export results as CSV">
+                            ⇩ CSV
+                        </button>
+                        <button onClick={() => doExport('json')} title="Export results as JSON">
+                            ⇩ JSON
+                        </button>
+                    </>
+                )}
             </div>
             <div className="query-editor">
                 <SqlEditor
                     engine={engine}
                     schema={schema}
                     defaultSchema={defaultSchema}
-                    initialSql={tab.sql}
+                    value={tab.sql}
                     onChange={sql => setTabSql(tab.id, sql)}
                     onRun={run}
                 />

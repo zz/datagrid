@@ -1349,3 +1349,239 @@
     color: white;
     font-size: 13px;
 }
+
+/* Results grid wrapper + text search */
+
+.results-grid-wrap {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.grid-searchbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.grid-search {
+    width: 240px;
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg);
+    font-size: 12px;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.grid-search-count {
+    color: var(--fg-dim);
+    font-size: 11px;
+}
+
+/* Table filter bar */
+
+.table-filterbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.table-filterbar select,
+.table-filterbar input {
+    padding: 3px 7px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg);
+    font-size: 12px;
+}
+
+.table-filterbar input {
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.table-filterbar .filter-val {
+    width: 120px;
+}
+
+.table-filterbar button {
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg);
+    font-size: 12px;
+}
+
+.filter-chip {
+    padding: 2px 8px;
+    border-radius: 10px;
+    background-color: var(--accent);
+    color: white;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+/* Toolbar export/format buttons reuse .table-toolbar/.query-toolbar button */
+
+.table-toolbar button {
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg);
+    font-size: 12px;
+}
+
+.table-toolbar button:disabled {
+    opacity: 0.4;
+}
+
+.table-toolbar button.primary {
+    background-color: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
+/* Cell inspector Raw/Formatted toggle */
+
+.cell-inspector-toggle {
+    display: inline-flex;
+    margin-left: auto;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.cell-inspector-toggle button {
+    padding: 2px 10px;
+    border: none;
+    background: transparent;
+    color: var(--fg-dim);
+    font-size: 11px;
+}
+
+.cell-inspector-toggle button.on {
+    background-color: var(--accent);
+    color: white;
+}
+
+.cell-inspector-header .icon-btn {
+    margin-left: 8px;
+}
+
+/* Import dialog */
+
+.import-dialog {
+    width: 560px;
+    max-width: 90vw;
+}
+
+.import-hint {
+    color: var(--fg-dim);
+    font-size: 12px;
+    margin: 0 0 10px;
+}
+
+.import-textarea {
+    width: 100%;
+    min-height: 140px;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg);
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 12px;
+    resize: vertical;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.import-summary {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--fg);
+}
+
+.import-ignored {
+    color: var(--fg-dim);
+    margin-top: 2px;
+}
+
+/* Go-to palette */
+
+.palette-backdrop {
+    align-items: flex-start;
+    padding-top: 12vh;
+}
+
+.palette {
+    width: 560px;
+    max-width: 90vw;
+    background-color: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+}
+
+.palette-input {
+    width: 100%;
+    padding: 12px 16px;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--fg);
+    font-size: 15px;
+    outline: none;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.palette-list {
+    max-height: 360px;
+    overflow-y: auto;
+}
+
+.palette-empty {
+    padding: 16px;
+    color: var(--fg-dim);
+    font-size: 13px;
+}
+
+.palette-item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 7px 16px;
+}
+
+.palette-item.selected {
+    background-color: var(--accent);
+    color: white;
+}
+
+.palette-table {
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 13px;
+}
+
+.palette-conn {
+    font-size: 11px;
+    opacity: 0.7;
+}
