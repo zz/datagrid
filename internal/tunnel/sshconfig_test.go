@@ -101,6 +101,23 @@ func TestParseJump(t *testing.T) {
 	}
 }
 
+func TestDefaultIdentityFilesAppended(t *testing.T) {
+	// A host with no explicit IdentityFile should still be offered the
+	// standard OpenSSH default keys (the library only returns a stale
+	// ~/.ssh/identity default, which is why real keys were missing before).
+	lk := decode(t, "Host plain\n    HostName example.com\n")
+	r := resolve(lk, &drivers.SSHCfg{Host: "plain"})
+	home, _ := os.UserHomeDir()
+	for _, want := range []string{
+		filepath.Join(home, ".ssh", "id_rsa"),
+		filepath.Join(home, ".ssh", "id_ed25519"),
+	} {
+		if !slices.Contains(r.IdentityFiles, want) {
+			t.Errorf("default key %q not offered; got %v", want, r.IdentityFiles)
+		}
+	}
+}
+
 func TestUnknownAliasFallsThrough(t *testing.T) {
 	lk := decode(t, sampleConfig)
 	// A host not in the config keeps its literal values (+ default port 22).

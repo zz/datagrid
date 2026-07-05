@@ -42,6 +42,17 @@ func configLookup(c *ssh_config.Config) *lookup {
 	}
 }
 
+// defaultIdentityFiles mirrors OpenSSH's built-in default key list (current
+// versions). Missing ones are skipped when building auth methods.
+var defaultIdentityFiles = []string{
+	"~/.ssh/id_rsa",
+	"~/.ssh/id_ecdsa",
+	"~/.ssh/id_ecdsa_sk",
+	"~/.ssh/id_ed25519",
+	"~/.ssh/id_ed25519_sk",
+	"~/.ssh/id_dsa",
+}
+
 // resolved is the effective connection settings after merging an explicit
 // SSHCfg with anything found in ~/.ssh/config for that host alias.
 type resolved struct {
@@ -82,14 +93,27 @@ func resolve(lk *lookup, sc *drivers.SSHCfg) resolved {
 		}
 	}
 
-	// Explicit key file wins; otherwise take IdentityFile(s) from config.
+	// Explicit key file wins; otherwise take IdentityFile(s) from config plus
+	// the standard OpenSSH default keys. The kevinburke/ssh_config library
+	// only returns a stale "~/.ssh/identity" default and doesn't reproduce
+	// OpenSSH's default key list, so we add it ourselves — this is what lets
+	// a host that relies on ~/.ssh/id_rsa or id_ed25519 authenticate.
 	if sc.KeyPath != "" {
 		r.IdentityFiles = []string{expandHome(sc.KeyPath)}
 	} else {
-		for _, id := range lk.getAll(alias, "IdentityFile") {
-			if id != "" {
-				r.IdentityFiles = append(r.IdentityFiles, expandHome(id))
+		seen := map[string]bool{}
+		add := func(p string) {
+			p = expandHome(p)
+			if p != "" && !seen[p] {
+				seen[p] = true
+				r.IdentityFiles = append(r.IdentityFiles, p)
 			}
+		}
+		for _, id := range lk.getAll(alias, "IdentityFile") {
+			add(id)
+		}
+		for _, def := range defaultIdentityFiles {
+			add(def)
 		}
 	}
 

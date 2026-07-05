@@ -5,10 +5,13 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -138,9 +141,9 @@ func connect(ctx context.Context, lk *lookup, sc *drivers.SSHCfg, auth Auth, via
 		via = jc
 	}
 
-	methods := authMethods(r, auth)
+	methods, tried := authMethods(r, auth)
 	if len(methods) == 0 {
-		return nil, fmt.Errorf("no usable SSH auth method for %s (agent, key file, or password)", r.Host)
+		return nil, fmt.Errorf("no usable SSH auth method for %s (no ssh-agent keys, no readable identity file, no password)", r.Host)
 	}
 	clientCfg := &ssh.ClientConfig{
 		User: r.User,
@@ -167,19 +170,23 @@ func connect(ctx context.Context, lk *lookup, sc *drivers.SSHCfg, auth Auth, via
 	c, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("ssh handshake with %s: %w", addr, err)
+		return nil, fmt.Errorf("ssh handshake with %s (tried: %s): %w", addr, strings.Join(tried, ", "), err)
 	}
 	return ssh.NewClient(c, chans, reqs), nil
 }
 
 // authMethods builds the SSH auth list: ssh-agent first, then each identity
 // file that exists and parses, then a password. Missing/unparseable identity
-// files are skipped so config defaults don't hard-fail the connection.
-func authMethods(r resolved, auth Auth) []ssh.AuthMethod {
-	var methods []ssh.AuthMethod
+// files are skipped so config defaults don't hard-fail the connection. It also
+// returns a human-readable list of what was actually offered, for errors.
+func authMethods(r resolved, auth Auth) (methods []ssh.AuthMethod, tried []string) {
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
 		if conn, err := net.Dial("unix", sock); err == nil {
-			methods = append(methods, ssh.PublicKeysCallback(agent.NewClient(conn).Signers))
+			signers, _ := agent.NewClient(conn).Signers()
+			if len(signers) > 0 {
+				methods = append(methods, ssh.PublicKeysCallback(agent.NewClient(conn).Signers))
+				tried = append(tried, fmt.Sprintf("agent(%d keys)", len(signers)))
+			}
 		}
 	}
 	for _, path := range r.IdentityFiles {
@@ -194,12 +201,20 @@ func authMethods(r resolved, auth Auth) []ssh.AuthMethod {
 			signer, err = ssh.ParsePrivateKey(pem)
 		}
 		if err != nil {
+			// Note passphrase-protected keys explicitly rather than silently
+			// dropping them — a common source of confusing auth failures.
+			var need *ssh.PassphraseMissingError
+			if errors.As(err, &need) {
+				tried = append(tried, filepath.Base(path)+" (needs passphrase, skipped)")
+			}
 			continue
 		}
 		methods = append(methods, ssh.PublicKeys(signer))
+		tried = append(tried, filepath.Base(path))
 	}
 	if auth.Password != "" {
 		methods = append(methods, ssh.Password(auth.Password))
+		tried = append(tried, "password")
 	}
-	return methods
+	return methods, tried
 }
