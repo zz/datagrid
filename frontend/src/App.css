@@ -1303,6 +1303,22 @@
     max-width: 520px;
 }
 
+/* Compact variant: fills only its panel, so the sidebar / other tabs and
+   toolbars around it stay usable (DataGrip-style per-panel isolation). */
+.error-boundary.compact {
+    flex: 1;
+    padding: 24px 20px;
+    overflow: auto;
+}
+
+.error-boundary.compact h2 {
+    font-size: 15px;
+}
+
+.error-boundary.compact pre {
+    font-size: 11px;
+}
+
 .error-boundary h2 {
     margin: 0 0 8px;
     font-size: 18px;

@@ -9,6 +9,7 @@ import QueryTab from './features/query/QueryTab'
 import TableDataTab from './features/tabledata/TableDataTab'
 import RedisTab from './features/redis/RedisTab'
 import HistoryPanel from './features/history/HistoryPanel'
+import ErrorBoundary from './components/ErrorBoundary'
 
 function App() {
     const [version, setVersion] = useState('')
@@ -44,7 +45,9 @@ function App() {
     return (
         <div className="shell">
             <aside className="sidebar" style={{ '--wails-draggable': 'drag' } as React.CSSProperties}>
-                <Sidebar />
+                <ErrorBoundary compact label="The connection list">
+                    <Sidebar />
+                </ErrorBoundary>
             </aside>
             <div className="main">
                 <div className="tabstrip" style={{ '--wails-draggable': 'drag' } as React.CSSProperties}>
@@ -84,13 +87,15 @@ function App() {
                         // Keep every tab mounted so editors/results survive switching.
                         tabs.map(t => (
                             <div key={t.id} className="tab-pane" style={{ display: t.id === activeTabId ? 'flex' : 'none' }}>
-                                {t.kind === 'table' ? (
-                                    <TableDataTab tab={t} />
-                                ) : t.kind === 'redis' ? (
-                                    <RedisTab tab={t} />
-                                ) : (
-                                    <QueryTab tab={t} />
-                                )}
+                                <ErrorBoundary resetKey={t.id} compact label="This tab">
+                                    {t.kind === 'table' ? (
+                                        <TableDataTab tab={t} />
+                                    ) : t.kind === 'redis' ? (
+                                        <RedisTab tab={t} />
+                                    ) : (
+                                        <QueryTab tab={t} />
+                                    )}
+                                </ErrorBoundary>
                             </div>
                         ))
                     ) : (
