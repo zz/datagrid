@@ -15,6 +15,7 @@ import { displayValue } from '../../ipc/types'
 import { drivers } from '../../../wailsjs/go/models'
 import { exportRows, ExportFormat } from '../../export'
 import ImportDialog from './ImportDialog'
+import CopyButton from '../../components/CopyButton'
 
 const FILTER_OPS = ['contains', '=', '!=', '<', '>', '<=', '>=', 'starts']
 
@@ -256,7 +257,8 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
             )}
             {view.error && (
                 <div className="table-error">
-                    <span>{view.error}</span>
+                    <span className="table-error-msg">{view.error}</span>
+                    <CopyButton text={view.error} />
                     <button onClick={() => reloadTable(tab.id)}>Retry</button>
                 </div>
             )}

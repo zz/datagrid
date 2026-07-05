@@ -1599,3 +1599,72 @@
     padding: 0 3px;
     border-radius: 3px;
 }
+
+/* Copyable errors */
+
+.copy-btn {
+    flex-shrink: 0;
+    padding: 1px 8px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg-dim);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.copy-btn:hover {
+    color: var(--fg);
+}
+
+/* Make error text selectable so it can be copied manually too. */
+.dialog-status,
+.table-error,
+.redis-error,
+.status-error,
+.query-status.error,
+.cell-inspector-status.error,
+.repl-reply.error {
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.dialog-status.err {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.dialog-status-msg {
+    flex: 1;
+}
+
+.table-error {
+    align-items: center;
+}
+
+.table-error-msg {
+    flex: 1;
+}
+
+.redis-error {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.redis-error-msg {
+    flex: 1;
+}
+
+.statusbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 10px;
+}
+
+.statusbar-actions .copy-btn {
+    padding: 0 7px;
+    line-height: 16px;
+}

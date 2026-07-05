@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { SaveConnection, TestConnection } from '../../../wailsjs/go/api/App'
 import { drivers } from '../../../wailsjs/go/models'
 import { useApp } from '../../store'
+import CopyButton from '../../components/CopyButton'
 
 const DEFAULT_PORTS: Record<string, string> = { postgres: '5432', mysql: '3306', redis: '6379' }
 
@@ -210,7 +211,12 @@ export default function ConnectionDialog() {
                         </>
                     )}
                 </div>
-                {status.kind !== 'idle' && <div className={`dialog-status ${status.kind}`}>{status.msg}</div>}
+                {status.kind !== 'idle' && (
+                    <div className={`dialog-status ${status.kind}`}>
+                        <span className="dialog-status-msg">{status.msg}</span>
+                        {status.kind === 'err' && <CopyButton text={status.msg} />}
+                    </div>
+                )}
                 <div className="modal-buttons">
                     <button onClick={test} disabled={status.kind === 'busy'}>
                         Test

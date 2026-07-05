@@ -7,6 +7,7 @@ import { ExplainQuery } from '../../../wailsjs/go/api/App'
 import { drivers } from '../../../wailsjs/go/models'
 import { useApp, MAX_ROWS, Tab } from '../../store'
 import { exportRows, ExportFormat } from '../../export'
+import CopyButton from '../../components/CopyButton'
 
 // Flags UPDATE/DELETE that lack a WHERE clause — these hit every row
 // (design §5: warn regardless of the connection's environment label).
@@ -94,6 +95,7 @@ export default function QueryTab({ tab }: { tab: Tab }) {
                     ✦ Format
                 </button>
                 <span className={`query-status ${q.summary?.error ? 'error' : ''}`}>{statusLine()}</span>
+                {q.summary?.error && <CopyButton text={q.summary.error} />}
                 {q.columns.length > 0 && (
                     <>
                         <span className="tb-spacer" />

@@ -95,6 +95,12 @@ func (a *App) GetAppInfo() AppInfo {
 	return AppInfo{Version: Version}
 }
 
+// Copy writes text to the system clipboard. Used so error messages and
+// values are copyable even where the webview blocks text selection.
+func (a *App) Copy(text string) error {
+	return runtime.ClipboardSetText(a.ctx, text)
+}
+
 // --- Connections --------------------------------------------------------
 
 func passwordRef(connID string) string { return "conn/" + connID + "/password" }

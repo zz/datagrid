@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useApp, Tab } from '../../store'
 import RedisValueView from './RedisValueView'
 import RedisRepl from './RedisRepl'
+import CopyButton from '../../components/CopyButton'
 
 const TYPE_FILTERS = ['', 'string', 'list', 'set', 'hash', 'zset', 'stream']
 
@@ -58,7 +59,12 @@ export default function RedisTab({ tab }: { tab: Tab }) {
                 </button>
             </div>
 
-            {view.error && <div className="redis-error">{view.error}</div>}
+            {view.error && (
+                <div className="redis-error">
+                    <span className="redis-error-msg">{view.error}</span>
+                    <CopyButton text={view.error} />
+                </div>
+            )}
 
             <div className="redis-body">
                 <div className="redis-keylist">

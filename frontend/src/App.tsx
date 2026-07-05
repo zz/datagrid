@@ -11,6 +11,7 @@ import RedisTab from './features/redis/RedisTab'
 import HistoryPanel from './features/history/HistoryPanel'
 import GoToPalette from './features/navigation/GoToPalette'
 import ErrorBoundary from './components/ErrorBoundary'
+import CopyButton from './components/CopyButton'
 
 function App() {
     const [version, setVersion] = useState('')
@@ -120,9 +121,17 @@ function App() {
                     )}
                 </div>
                 <div className="statusbar">
-                    <span className={lastError ? 'status-error' : ''} onClick={() => setError(null)} title={lastError ?? ''}>
-                        {lastError ? `⚠ ${lastError.slice(0, 120)}` : 'Ready'}
+                    <span className={lastError ? 'status-error' : ''} title={lastError ?? ''}>
+                        {lastError ? `⚠ ${lastError.slice(0, 140)}` : 'Ready'}
                     </span>
+                    {lastError && (
+                        <span className="statusbar-actions">
+                            <CopyButton text={lastError} />
+                            <button className="copy-btn" onClick={() => setError(null)}>
+                                Dismiss
+                            </button>
+                        </span>
+                    )}
                     <span className="statusbar-right">{version && `v${version}`}</span>
                 </div>
             </div>
