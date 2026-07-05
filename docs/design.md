@@ -2,7 +2,7 @@
 
 A native macOS (Apple Silicon) database GUI tool in the spirit of DataGrip / TablePlus.
 
-- **Status:** Draft v0.2 (2026-07-05) — switched core language from Rust to Go
+- **Status:** v0.3 (2026-07-05) — Go implementation; milestones M0–M5 built (Postgres, MySQL/MariaDB, Redis/Valkey; editing, history, EXPLAIN, cell inspector, prod/read-only labels). Release signing/notarization/auto-update pending Apple credentials (see [RELEASE.md](RELEASE.md)).
 - **Target platform:** macOS 13+ on ARM64 (Apple Silicon) first; architecture keeps the door open for Intel macOS, Linux, and Windows later.
 - **Initial database support:** MySQL / MariaDB, PostgreSQL, Redis / Valkey.
 

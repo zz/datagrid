@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import SqlEditor from '../../components/SqlEditor'
 import ResultsGrid from '../../components/ResultsGrid'
+import PlanTree from '../../components/PlanTree'
+import { ExplainQuery } from '../../../wailsjs/go/api/App'
+import { drivers } from '../../../wailsjs/go/models'
 import { useApp, MAX_ROWS, Tab } from '../../store'
 
 // Flags UPDATE/DELETE that lack a WHERE clause — these hit every row
@@ -15,14 +18,26 @@ export default function QueryTab({ tab }: { tab: Tab }) {
     const q = useApp(s => s.queries[tab.id])
     const conn = useApp(s => s.connections.find(c => c.id === tab.connId))
     const schema = useApp(s => s.autocomplete[tab.connId])
-    const { runQuery, cancelQuery, setTabSql } = useApp()
+    const { runQuery, cancelQuery, setTabSql, setError } = useApp()
     const [confirm, setConfirm] = useState<string | null>(null)
+    const [plan, setPlan] = useState<drivers.PlanNode | null>(null)
 
     if (!q) return null
 
     const engine = conn?.engine ?? 'postgres'
     // MySQL's "schema" is the database itself; Postgres defaults to public.
     const defaultSchema = engine === 'mysql' ? conn?.database : 'public'
+
+    const explain = async () => {
+        const statement = tab.sql.trim()
+        if (!statement) return
+        try {
+            const p = await ExplainQuery(tab.connId, statement)
+            setPlan(p)
+        } catch (err) {
+            setError(String(err))
+        }
+    }
 
     const run = (stmt: string) => {
         const statement = stmt || tab.sql
@@ -54,6 +69,9 @@ export default function QueryTab({ tab }: { tab: Tab }) {
                 <button disabled={!q.running} onClick={() => cancelQuery(tab.id)}>
                     ■ Cancel
                 </button>
+                <button disabled={q.running} onClick={explain} title="Show the query plan">
+                    ⋔ Explain
+                </button>
                 <span className={`query-status ${q.summary?.error ? 'error' : ''}`}>{statusLine()}</span>
             </div>
             <div className="query-editor">
@@ -67,8 +85,18 @@ export default function QueryTab({ tab }: { tab: Tab }) {
                 />
             </div>
             <div className="query-results">
-                {q.columns.length > 0 ? (
-                    <ResultsGrid columns={q.columns} rows={q.rows} />
+                {plan ? (
+                    <div className="plan-panel">
+                        <div className="plan-panel-header">
+                            Query plan
+                            <button className="icon-btn" onClick={() => setPlan(null)} title="Back to results">
+                                ×
+                            </button>
+                        </div>
+                        <PlanTree plan={plan} />
+                    </div>
+                ) : q.columns.length > 0 ? (
+                    <ResultsGrid connId={tab.connId} columns={q.columns} rows={q.rows} />
                 ) : (
                     <div className="results-empty">{q.running ? 'Waiting for first rows…' : 'No results'}</div>
                 )}

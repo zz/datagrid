@@ -15,6 +15,8 @@ const emptyForm = {
     password: '',
     tlsMode: 'prefer',
     envLabel: 'dev',
+    readOnly: false,
+    colorTag: '',
     sshEnabled: false,
     sshHost: '',
     sshPort: '22',
@@ -34,9 +36,10 @@ function toConfig(form: Form, id: string): drivers.ConnectionConfig {
         database: form.database,
         user: form.user,
         tlsMode: form.tlsMode,
-        readOnly: false,
+        // Prod connections are read-only unless explicitly unlocked (design §5).
+        readOnly: form.readOnly || form.envLabel === 'prod',
         envLabel: form.envLabel,
-        colorTag: '',
+        colorTag: form.colorTag,
         ssh: form.sshEnabled
             ? {
                   host: form.sshHost,
@@ -63,6 +66,8 @@ export default function ConnectionDialog() {
                   user: editing.user,
                   tlsMode: editing.tlsMode || 'prefer',
                   envLabel: editing.envLabel || 'dev',
+                  readOnly: editing.readOnly,
+                  colorTag: editing.colorTag || '',
                   sshEnabled: !!editing.ssh,
                   sshHost: editing.ssh?.host ?? '',
                   sshPort: String(editing.ssh?.port || 22),
@@ -154,6 +159,28 @@ export default function ConnectionDialog() {
                         <option value="staging">staging</option>
                         <option value="prod">prod</option>
                     </select>
+                    <label>Color</label>
+                    <div className="color-tags">
+                        {['', 'blue', 'green', 'orange', 'red', 'purple'].map(c => (
+                            <button
+                                key={c || 'none'}
+                                type="button"
+                                className={`color-swatch ${c || 'none'} ${form.colorTag === c ? 'selected' : ''}`}
+                                title={c || 'none'}
+                                onClick={() => setForm(f => ({ ...f, colorTag: c }))}
+                            />
+                        ))}
+                    </div>
+                    <label className="ssh-toggle">
+                        <input
+                            type="checkbox"
+                            checked={form.readOnly || form.envLabel === 'prod'}
+                            disabled={form.envLabel === 'prod'}
+                            onChange={set('readOnly')}
+                        />{' '}
+                        Read-only{form.envLabel === 'prod' && ' (forced for prod)'}
+                    </label>
+                    <span />
                     <label className="ssh-toggle">
                         <input type="checkbox" checked={form.sshEnabled} onChange={set('sshEnabled')} /> SSH tunnel
                     </label>

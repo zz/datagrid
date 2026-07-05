@@ -140,3 +140,16 @@ func itoa64(n int64) string {
 	}
 	return string(b)
 }
+
+func TestExplain(t *testing.T) {
+	sess := testSession(t)
+	ex := sess.(drivers.Explainer)
+	plan, err := ex.Explain(context.Background(), "SELECT * FROM users WHERE id = 42")
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	if len(plan.Children) == 0 {
+		t.Fatalf("expected at least one plan step, got %+v", plan)
+	}
+	t.Logf("plan step: %s %s", plan.Children[0].Label, plan.Children[0].Detail)
+}

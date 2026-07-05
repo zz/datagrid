@@ -513,6 +513,34 @@ func isReadOnlyStatement(statement string) bool {
 	return head == "select" // bare, e.g. "SELECT 1" already matched above
 }
 
+// ExplainQuery returns the query plan for a statement as a tree.
+func (a *App) ExplainQuery(connID string, statement string) (*drivers.PlanNode, error) {
+	os, err := a.session(connID)
+	if err != nil {
+		return nil, err
+	}
+	ex, ok := os.session.(drivers.Explainer)
+	if !ok {
+		return nil, errors.New("this connection does not support EXPLAIN")
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	defer cancel()
+	return ex.Explain(ctx, statement)
+}
+
+// SetReadOnly toggles the read-only flag for an open session (per-session;
+// not persisted). Used by the UI's prod-safety confirmation flow.
+func (a *App) SetReadOnly(connID string, readOnly bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	os, ok := a.sessions[connID]
+	if !ok {
+		return errors.New("not connected")
+	}
+	os.cfg.ReadOnly = readOnly
+	return nil
+}
+
 // CancelQuery cancels a running query on a connection.
 func (a *App) CancelQuery(connID string, queryID string) error {
 	os, err := a.session(connID)

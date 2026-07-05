@@ -9,15 +9,18 @@ import {
 import '@glideapps/glide-data-grid/dist/index.css'
 import type { Column, Value } from '../ipc/types'
 import { displayValue } from '../ipc/types'
+import CellInspector from './CellInspector'
 
 interface Props {
+    connId: string
     columns: Column[]
     rows: Value[][]
 }
 
-export default function ResultsGrid({ columns, rows }: Props) {
+export default function ResultsGrid({ connId, columns, rows }: Props) {
     const wrap = useRef<HTMLDivElement>(null)
     const [size, setSize] = useState({ w: 0, h: 0 })
+    const [inspect, setInspect] = useState<{ column: string; cell: Value } | null>(null)
 
     useEffect(() => {
         const el = wrap.current
@@ -64,6 +67,16 @@ export default function ResultsGrid({ columns, rows }: Props) {
         [rows],
     )
 
+    // Double-clicking a cell opens the inspector — the only way to read a
+    // truncated oversized value in full.
+    const onCellActivated = useCallback(
+        ([col, row]: Item) => {
+            const cell = rows[row]?.[col]
+            if (cell) setInspect({ column: columns[col]?.name ?? '', cell })
+        },
+        [rows, columns],
+    )
+
     return (
         <div className="results-grid" ref={wrap}>
             {size.w > 0 && columns.length > 0 && (
@@ -73,10 +86,19 @@ export default function ResultsGrid({ columns, rows }: Props) {
                     columns={gridColumns}
                     rows={rows.length}
                     getCellContent={getCellContent}
+                    onCellActivated={onCellActivated}
                     rowMarkers="number"
                     smoothScrollX
                     smoothScrollY
                     getCellsForSelection={true}
+                />
+            )}
+            {inspect && (
+                <CellInspector
+                    connId={connId}
+                    column={inspect.column}
+                    cell={inspect.cell}
+                    onClose={() => setInspect(null)}
                 />
             )}
         </div>

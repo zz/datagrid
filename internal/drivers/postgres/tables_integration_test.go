@@ -185,3 +185,20 @@ func itoa64(n int64) string {
 	}
 	return string(b)
 }
+
+func TestExplain(t *testing.T) {
+	sess := testSession(t)
+	ex := sess.(drivers.Explainer)
+	plan, err := ex.Explain(context.Background(), "SELECT * FROM app.users WHERE id = 42")
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	if plan.Label == "" {
+		t.Error("plan root has no label")
+	}
+	// An indexed lookup on the PK should mention a scan node with detail.
+	if plan.Detail == "" && len(plan.Children) == 0 {
+		t.Errorf("expected plan detail or children, got %+v", plan)
+	}
+	t.Logf("plan: %s %s", plan.Label, plan.Detail)
+}
