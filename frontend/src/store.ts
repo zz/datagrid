@@ -172,6 +172,7 @@ interface AppState {
     openTableTab: (connId: string, schema: string, table: string) => Promise<void>
     openRedisTab: (connId: string, db: number) => Promise<void>
     closeTab: (tabId: string) => void
+    closeTabs: (tabIds: string[]) => void
     setActiveTab: (tabId: string) => void
     setTabSql: (tabId: string, sql: string) => void
     runQuery: (tabId: string, statement: string) => Promise<void>
@@ -370,23 +371,29 @@ export const useApp = create<AppState>((set, get) => ({
         await get().redisScan(tab.id, true)
     },
 
-    closeTab: (tabId) => {
+    closeTab: (tabId) => get().closeTabs([tabId]),
+
+    closeTabs: (tabIds) => {
+        const drop = new Set(tabIds)
         set(s => {
-            const tabs = s.tabs.filter(t => t.id !== tabId)
+            const tabs = s.tabs.filter(t => !drop.has(t.id))
             const queries = { ...s.queries }
             const tableViews = { ...s.tableViews }
             const redisViews = { ...s.redisViews }
-            delete queries[tabId]
-            delete tableViews[tabId]
-            delete redisViews[tabId]
-            return {
-                tabs,
-                queries,
-                tableViews,
-                redisViews,
-                activeTabId:
-                    s.activeTabId === tabId ? (tabs.length ? tabs[tabs.length - 1].id : null) : s.activeTabId,
+            for (const id of drop) {
+                delete queries[id]
+                delete tableViews[id]
+                delete redisViews[id]
             }
+            // Keep a valid active tab: if the active one was closed, fall back
+            // to the last remaining tab (or none).
+            const activeTabId =
+                s.activeTabId && drop.has(s.activeTabId)
+                    ? tabs.length
+                        ? tabs[tabs.length - 1].id
+                        : null
+                    : s.activeTabId
+            return { tabs, queries, tableViews, redisViews, activeTabId }
         })
     },
 

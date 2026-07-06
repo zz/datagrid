@@ -11,6 +11,7 @@ import RedisTab from './features/redis/RedisTab'
 import HistoryPanel from './features/history/HistoryPanel'
 import GoToPalette from './features/navigation/GoToPalette'
 import ErrorBoundary from './components/ErrorBoundary'
+import ContextMenu, { MenuItem } from './components/ContextMenu'
 import CopyButton from './components/CopyButton'
 import SettingsDialog from './features/settings/SettingsDialog'
 import ConnectionManager from './features/connections/ConnectionManager'
@@ -21,11 +22,13 @@ function App() {
     const [paletteOpen, setPaletteOpen] = useState(false)
     const [settingsOpen, setSettingsOpen] = useState(false)
     const [managerOpen, setManagerOpen] = useState(false)
+    const [tabMenu, setTabMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
     const {
         tabs,
         activeTabId,
         setActiveTab,
         closeTab,
+        closeTabs,
         dialog,
         lastError,
         setError,
@@ -60,6 +63,20 @@ function App() {
 
     const activeTab = tabs.find(t => t.id === activeTabId)
 
+    // Right-click menu for an editor tab. Close-others/right are disabled when
+    // there are no such tabs to close.
+    const tabMenuItems = (tabId: string): MenuItem[] => {
+        const idx = tabs.findIndex(t => t.id === tabId)
+        const others = tabs.filter(t => t.id !== tabId).map(t => t.id)
+        const toRight = tabs.slice(idx + 1).map(t => t.id)
+        return [
+            { label: 'Close', onClick: () => closeTab(tabId) },
+            { label: 'Close others', disabled: others.length === 0, onClick: () => closeTabs(others) },
+            { label: 'Close to the right', disabled: toRight.length === 0, onClick: () => closeTabs(toRight) },
+            { label: 'Close all', disabled: tabs.length === 0, onClick: () => closeTabs(tabs.map(t => t.id)) },
+        ]
+    }
+
     return (
         <div className="shell">
             <aside className="sidebar" style={{ '--wails-draggable': 'drag' } as React.CSSProperties}>
@@ -75,6 +92,17 @@ function App() {
                             key={t.id}
                             className={`tab ${t.id === activeTabId ? 'active' : ''}`}
                             onClick={() => setActiveTab(t.id)}
+                            onContextMenu={e => {
+                                e.preventDefault()
+                                setTabMenu({ x: e.clientX, y: e.clientY, tabId: t.id })
+                            }}
+                            onAuxClick={e => {
+                                // Middle-click closes the tab, like a browser.
+                                if (e.button === 1) {
+                                    e.preventDefault()
+                                    closeTab(t.id)
+                                }
+                            }}
                         >
                             <span className={`tab-kind ${t.kind}`}>
                                 {t.kind === 'table' ? '▦' : t.kind === 'redis' ? '◆' : '›_'}
@@ -152,6 +180,9 @@ function App() {
             {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
             {managerOpen && <ConnectionManager onClose={() => setManagerOpen(false)} />}
             {dialog.open && <ConnectionDialog key={dialog.editing?.id ?? 'new'} />}
+            {tabMenu && (
+                <ContextMenu x={tabMenu.x} y={tabMenu.y} items={tabMenuItems(tabMenu.tabId)} onClose={() => setTabMenu(null)} />
+            )}
         </div>
     )
 }
