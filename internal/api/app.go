@@ -412,6 +412,110 @@ func (a *App) ApplyChangeset(connID string, req drivers.ChangesetRequest) (*driv
 	return result, err
 }
 
+// --- DDL: create/alter databases, tables, columns -----------------------
+
+// schemaEditor returns the connection's DDL editor, refusing on read-only
+// connections so every DDL entry point is guarded in one place.
+func (a *App) schemaEditor(connID string) (drivers.SchemaEditor, error) {
+	os, err := a.session(connID)
+	if err != nil {
+		return nil, err
+	}
+	se, ok := os.session.(drivers.SchemaEditor)
+	if !ok {
+		return nil, errors.New("this connection does not support schema changes")
+	}
+	if os.cfg.ReadOnly {
+		return nil, errors.New("connection is read-only; schema changes are disabled")
+	}
+	return se, nil
+}
+
+// ddlCtx is the shared timeout for a single DDL statement.
+func (a *App) ddlCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(a.ctx, 60*time.Second)
+}
+
+func (a *App) CreateDatabase(connID, name string) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.CreateDatabase(ctx, name)
+}
+
+func (a *App) DropDatabase(connID, name string) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.DropDatabase(ctx, name)
+}
+
+func (a *App) CreateTable(connID string, spec drivers.TableSpec) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.CreateTable(ctx, spec)
+}
+
+func (a *App) DropTable(connID, schema, table string) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.DropTable(ctx, schema, table)
+}
+
+func (a *App) RenameTable(connID, schema, table, newName string) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.RenameTable(ctx, schema, table, newName)
+}
+
+func (a *App) AddColumn(connID, schema, table string, col drivers.ColumnSpec) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.AddColumn(ctx, schema, table, col)
+}
+
+func (a *App) DropColumn(connID, schema, table, column string) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.DropColumn(ctx, schema, table, column)
+}
+
+func (a *App) RenameColumn(connID, schema, table, column, newName string) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.RenameColumn(ctx, schema, table, column, newName)
+}
+
 // SaveTextFile prompts for a location and writes content there. Used by the
 // data exporters. Returns the chosen path, or "" if the user cancelled.
 func (a *App) SaveTextFile(defaultName, content string) (string, error) {
