@@ -5,18 +5,21 @@
 #   make build         build the .app (ad-hoc signed by Wails)
 #   make build-signed  build, then re-sign with a stable identity so the
 #                      Keychain "Always Allow" grant sticks across rebuilds
+#   make dmg           build the .app and package it into a drag-to-install .dmg
 #   make check         run the full check suite (fmt, vet, go test, tsc, eslint)
 #   make test          run Go tests
 #   make clean         remove build artifacts
 
 WAILS   ?= $(HOME)/go/bin/wails
 APP      = build/bin/datagrid.app
+DMG      = build/bin/DataGrid.dmg
+VOLNAME  = DataGrid
 # Stable self-signed code-signing identity (create once in Keychain Access:
 # Certificate Assistant -> Create a Certificate -> Self-Signed Root, Code Signing).
 # Override on the command line: make build-signed IDENTITY="My Identity"
 IDENTITY ?= DataGrid Dev
 
-.PHONY: dev build build-signed sign generate check fmt vet test tsc lint clean
+.PHONY: dev build build-signed sign dmg generate check fmt vet test tsc lint clean
 
 dev:
 	$(WAILS) dev
@@ -32,6 +35,18 @@ build-signed: build sign
 sign:
 	codesign --force --deep --sign "$(IDENTITY)" "$(APP)"
 	@echo "Signed $(APP) with \"$(IDENTITY)\". Launch it and click \"Always Allow\" once."
+
+# Package the built .app into a compressed, drag-to-install .dmg using the
+# built-in hdiutil (no extra tooling). Run `make build` (or build-signed) first.
+dmg:
+	@test -d "$(APP)" || { echo "no $(APP); run 'make build' first"; exit 1; }
+	@rm -f "$(DMG)"
+	@staging=$$(mktemp -d) && \
+	  cp -R "$(APP)" "$$staging/" && \
+	  ln -s /Applications "$$staging/Applications" && \
+	  hdiutil create -volname "$(VOLNAME)" -srcfolder "$$staging" -ov -format UDZO "$(DMG)" >/dev/null && \
+	  rm -rf "$$staging" && \
+	  echo "Built $(DMG) ($$(du -h "$(DMG)" | cut -f1))"
 
 # Regenerate the TypeScript bindings for the Go bound methods.
 generate:
