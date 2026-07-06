@@ -1,0 +1,40 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- background squircle -->
+  <rect x="96" y="96" width="832" height="832" rx="186" ry="186" fill="#1E7FEE"/>
+  <!-- lighter top band, matching the squircle's top corners (subtle depth) -->
+  <path d="M96,300 L96,282 Q96,96 282,96 L742,96 Q928,96 928,282 L928,300 Z" fill="#48A2FF" opacity="0.45"/>
+  <!-- darker bottom band, matching the squircle's bottom corners -->
+  <path d="M96,724 L96,742 Q96,928 282,928 L742,928 Q928,928 928,742 L928,724 Z" fill="#0C4FC4" opacity="0.45"/>
+
+  <!-- drop shadow behind the table panel -->
+  <rect x="264" y="302" width="500" height="452" rx="46" ry="46" fill="#062E7A" opacity="0.28"/>
+
+  <!-- table panel -->
+  <rect x="262" y="286" width="500" height="452" rx="46" ry="46" fill="#FFFFFF"/>
+  <!-- subtle panel bottom tint -->
+  <rect x="262" y="600" width="500" height="138" rx="46" ry="46" fill="#E9F1FF" opacity="0.85"/>
+
+  <!-- header band (rounded top, flat bottom) -->
+  <path d="M262,392 L262,332 Q262,286 308,286 L716,286 Q762,286 762,332 L762,392 Z" fill="#0B4FCB"/>
+
+  <!-- key-column accent cells (first column) -->
+  <g fill="#1E7FEE" opacity="0.13">
+    <rect x="270" y="399" width="150" height="102"/>
+    <rect x="270" y="515" width="150" height="101"/>
+    <rect x="270" y="630" width="150" height="100"/>
+  </g>
+
+  <!-- grid lines -->
+  <g stroke="#8FB6EE" stroke-width="8" stroke-linecap="round">
+    <line x1="270" y1="501" x2="754" y2="501"/>
+    <line x1="270" y1="616" x2="754" y2="616"/>
+    <line x1="420" y1="396" x2="420" y2="730"/>
+    <line x1="592" y1="396" x2="592" y2="730"/>
+  </g>
+
+  <!-- header column ticks -->
+  <g stroke="#5B93E8" stroke-width="8" stroke-linecap="round" opacity="0.6">
+    <line x1="420" y1="300" x2="420" y2="386"/>
+    <line x1="592" y1="300" x2="592" y2="386"/>
+  </g>
+</svg>
