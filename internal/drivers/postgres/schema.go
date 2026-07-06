@@ -51,3 +51,45 @@ func (s *session) DropColumn(ctx context.Context, schema, table, column string) 
 func (s *session) RenameColumn(ctx context.Context, schema, table, column, newName string) error {
 	return s.exec(ctx, dialect.BuildRenameColumn(schema, table, column, newName))
 }
+
+func (s *session) ListIndexes(ctx context.Context, schema, table string) ([]drivers.IndexInfo, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT i.relname AS index_name,
+       ix.indisunique,
+       array_agg(a.attname ORDER BY k.ord) AS cols
+FROM pg_index ix
+JOIN pg_class i ON i.oid = ix.indexrelid
+JOIN pg_class t ON t.oid = ix.indrelid
+JOIN pg_namespace n ON n.oid = t.relnamespace
+JOIN unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+WHERE n.nspname = $1 AND t.relname = $2
+GROUP BY i.relname, ix.indisunique
+ORDER BY i.relname`, schema, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []drivers.IndexInfo
+	for rows.Next() {
+		var idx drivers.IndexInfo
+		if err := rows.Scan(&idx.Name, &idx.Unique, &idx.Columns); err != nil {
+			return nil, err
+		}
+		out = append(out, idx)
+	}
+	return out, rows.Err()
+}
+
+func (s *session) CreateIndex(ctx context.Context, schema, table string, spec drivers.IndexSpec) error {
+	sql, err := dialect.BuildCreateIndex(schema, table, spec)
+	if err != nil {
+		return err
+	}
+	return s.exec(ctx, sql)
+}
+
+func (s *session) DropIndex(ctx context.Context, schema, table, name string) error {
+	// Postgres indexes are schema-scoped objects (the table is implied).
+	return s.exec(ctx, "DROP INDEX "+dialect.QualifiedName(schema, name))
+}

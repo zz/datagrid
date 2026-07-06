@@ -24,9 +24,23 @@ type TableSpec struct {
 	Columns []ColumnSpec `json:"columns"`
 }
 
+// IndexInfo describes an existing index for the index manager.
+type IndexInfo struct {
+	Name    string   `json:"name"`
+	Columns []string `json:"columns"`
+	Unique  bool     `json:"unique"`
+}
+
+// IndexSpec describes an index to create.
+type IndexSpec struct {
+	Name    string   `json:"name"`
+	Columns []string `json:"columns"`
+	Unique  bool     `json:"unique"`
+}
+
 // SchemaEditor is implemented by SQL sessions that support DDL (creating and
-// altering databases, tables, and columns). Redis and other non-SQL engines
-// do not implement it.
+// altering databases, tables, columns, and indexes). Redis and other non-SQL
+// engines do not implement it.
 type SchemaEditor interface {
 	CreateDatabase(ctx context.Context, name string) error
 	DropDatabase(ctx context.Context, name string) error
@@ -36,6 +50,15 @@ type SchemaEditor interface {
 	AddColumn(ctx context.Context, schema, table string, col ColumnSpec) error
 	DropColumn(ctx context.Context, schema, table, column string) error
 	RenameColumn(ctx context.Context, schema, table, column, newName string) error
+	ListIndexes(ctx context.Context, schema, table string) ([]IndexInfo, error)
+	CreateIndex(ctx context.Context, schema, table string, spec IndexSpec) error
+	DropIndex(ctx context.Context, schema, table, name string) error
+}
+
+// QualifiedName exposes schema-qualified identifier quoting to the per-engine
+// driver packages (e.g. for DROP INDEX, which they build themselves).
+func (d Dialect) QualifiedName(schema, name string) string {
+	return d.qualified(schema, name)
 }
 
 // columnDef renders one column definition, e.g. `"name" varchar(255) NOT NULL
@@ -113,6 +136,27 @@ func (d Dialect) BuildDropColumn(schema, table, column string) string {
 // Postgres and MySQL 8.0+/MariaDB 10.5.2+.
 func (d Dialect) BuildRenameColumn(schema, table, column, newName string) string {
 	return fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", d.qualified(schema, table), d.Quote(column), d.Quote(newName))
+}
+
+// BuildCreateIndex renders CREATE [UNIQUE] INDEX name ON table (cols). Shared
+// by Postgres and MySQL. DROP INDEX differs per engine, so it is built in each
+// driver instead.
+func (d Dialect) BuildCreateIndex(schema, table string, spec IndexSpec) (string, error) {
+	if strings.TrimSpace(spec.Name) == "" {
+		return "", fmt.Errorf("index name is required")
+	}
+	if len(spec.Columns) == 0 {
+		return "", fmt.Errorf("an index needs at least one column")
+	}
+	cols := make([]string, len(spec.Columns))
+	for i, c := range spec.Columns {
+		cols[i] = d.Quote(c)
+	}
+	unique := ""
+	if spec.Unique {
+		unique = "UNIQUE "
+	}
+	return fmt.Sprintf("CREATE %sINDEX %s ON %s (%s)", unique, d.Quote(spec.Name), d.qualified(schema, table), strings.Join(cols, ", ")), nil
 }
 
 // BuildCreateDatabase renders CREATE DATABASE for a bare database name.

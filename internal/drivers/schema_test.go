@@ -75,6 +75,32 @@ func TestBuildAlterStatements(t *testing.T) {
 	}
 }
 
+func TestBuildCreateIndex(t *testing.T) {
+	sql, err := pgLike.BuildCreateIndex("app", "users", IndexSpec{Name: "idx_users_email", Columns: []string{"email"}, Unique: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `CREATE UNIQUE INDEX "idx_users_email" ON "app"."users" ("email")`
+	if sql != want {
+		t.Errorf("got %s want %s", sql, want)
+	}
+
+	sql, err = myLike.BuildCreateIndex("", "users", IndexSpec{Name: "idx_ab", Columns: []string{"a", "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "CREATE INDEX `idx_ab` ON `users` (`a`, `b`)"; sql != want {
+		t.Errorf("got %s want %s", sql, want)
+	}
+
+	if _, err := pgLike.BuildCreateIndex("app", "users", IndexSpec{Name: "x"}); err == nil {
+		t.Error("expected error for index with no columns")
+	}
+	if _, err := pgLike.BuildCreateIndex("app", "users", IndexSpec{Columns: []string{"a"}}); err == nil {
+		t.Error("expected error for index with no name")
+	}
+}
+
 func TestBuildAddColumn(t *testing.T) {
 	sql, err := myLike.BuildAddColumn("", "users", ColumnSpec{Name: "age", Type: "int", Nullable: true})
 	if err != nil {

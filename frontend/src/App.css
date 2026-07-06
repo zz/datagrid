@@ -2043,6 +2043,70 @@
     font-size: 12px;
 }
 
+/* Index manager dialog. */
+.index-list {
+    margin: 10px 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    max-height: 180px;
+    overflow: auto;
+}
+.index-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+}
+.index-row:last-child {
+    border-bottom: none;
+}
+.index-name {
+    font-weight: 600;
+}
+.index-badge {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 0 4px;
+}
+.index-cols {
+    color: var(--fg-dim);
+}
+.index-create {
+    margin-top: 12px;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+}
+.index-create-title {
+    font-weight: 600;
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+.index-col-picker {
+    flex: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.index-col-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    cursor: pointer;
+}
+.index-col-chip.on {
+    border-color: var(--accent);
+    background-color: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
 .name-dialog input {
     width: 100%;
     padding: 6px 10px;

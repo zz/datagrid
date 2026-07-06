@@ -516,6 +516,42 @@ func (a *App) RenameColumn(connID, schema, table, column, newName string) error 
 	return se.RenameColumn(ctx, schema, table, column, newName)
 }
 
+// ListIndexes is a read, so it works on read-only connections too (it uses the
+// session directly rather than the write-guarded schemaEditor).
+func (a *App) ListIndexes(connID, schema, table string) ([]drivers.IndexInfo, error) {
+	os, err := a.session(connID)
+	if err != nil {
+		return nil, err
+	}
+	se, ok := os.session.(drivers.SchemaEditor)
+	if !ok {
+		return nil, errors.New("this connection does not support schema changes")
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.ListIndexes(ctx, schema, table)
+}
+
+func (a *App) CreateIndex(connID, schema, table string, spec drivers.IndexSpec) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.CreateIndex(ctx, schema, table, spec)
+}
+
+func (a *App) DropIndex(connID, schema, table, name string) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.DropIndex(ctx, schema, table, name)
+}
+
 // SaveTextFile prompts for a location and writes content there. Used by the
 // data exporters. Returns the chosen path, or "" if the user cancelled.
 func (a *App) SaveTextFile(defaultName, content string) (string, error) {
