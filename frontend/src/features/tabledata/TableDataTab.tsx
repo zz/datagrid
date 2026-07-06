@@ -46,6 +46,7 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
     const [search, setSearch] = useState('')
     const [fillValue, setFillValue] = useState('')
     const [showImport, setShowImport] = useState(false)
+    const [confirmRefresh, setConfirmRefresh] = useState(false)
     const [whereDraft, setWhereDraft] = useState('')
     const [menu, setMenu] = useState<{ x: number; y: number; col: number; row: number } | null>(null)
     const [inspect, setInspect] = useState<{ column: string; cell: Value } | null>(null)
@@ -155,6 +156,13 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
         }
     }
 
+    // Re-fetch the current page from the database to pick up external changes.
+    // Reloading discards local edits, so confirm first when any are pending.
+    const refresh = () => {
+        if (dirty) setConfirmRefresh(true)
+        else reloadTable(tab.id, true)
+    }
+
     const addFilter = () => {
         if (!fCol) return
         const next = [...view.filters, drivers.FilterSpec.createFrom({ column: fCol, op: fOp, value: fVal })]
@@ -229,6 +237,9 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
                     title="Last page"
                 >
                     Last »
+                </button>
+                <button onClick={refresh} disabled={view.loading} title="Reload this page from the database">
+                    ⟳ Refresh
                 </button>
                 <span className="tb-sep" />
                 <button onClick={() => doExport('csv')} title="Export page as CSV">
@@ -339,9 +350,13 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
             )}
 
             <div className="table-grid" ref={wrap}>
-                {view.loading ? (
+                {/* Only replace the grid with a spinner on the initial load. During a
+                    refresh (columns already loaded) we keep the DataEditor mounted so
+                    its scroll position survives, and dim it with an overlay instead. */}
+                {view.loading && view.columns.length > 0 && <div className="grid-loading" />}
+                {view.loading && view.columns.length === 0 ? (
                     <div className="grid-status">Loading…</div>
-                ) : view.error ? (
+                ) : view.error && view.columns.length === 0 ? (
                     <div className="grid-status error">Couldn’t load this table.</div>
                 ) : view.columns.length === 0 ? (
                     <div className="grid-status">No data.</div>
@@ -389,6 +404,31 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
                 <CellInspector connId={tab.connId} column={inspect.column} cell={inspect.cell} onClose={() => setInspect(null)} />
             )}
             {showImport && <ImportDialog tab={tab} onClose={() => setShowImport(false)} />}
+
+            {confirmRefresh && (
+                <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && setConfirmRefresh(false)}>
+                    <div className="modal modal-warn">
+                        <h2>⚠ Discard pending edits?</h2>
+                        <p>
+                            Reloading from the database will discard your{' '}
+                            <b>{view.edits.length}</b> pending {view.edits.length === 1 ? 'edit' : 'edits'}.
+                        </p>
+                        <div className="modal-buttons">
+                            <div className="spacer" />
+                            <button onClick={() => setConfirmRefresh(false)}>Cancel</button>
+                            <button
+                                className="danger"
+                                onClick={() => {
+                                    setConfirmRefresh(false)
+                                    reloadTable(tab.id, true)
+                                }}
+                            >
+                                Discard and reload
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

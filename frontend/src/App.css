@@ -556,6 +556,17 @@
     flex: 1;
     min-height: 0;
     display: flex;
+    position: relative;
+}
+
+/* Shown over the grid during a refresh so it dims without unmounting
+   (which would reset the scroll position). */
+.grid-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    background-color: color-mix(in srgb, var(--bg) 35%, transparent);
+    pointer-events: none;
 }
 
 .sql-preview {
