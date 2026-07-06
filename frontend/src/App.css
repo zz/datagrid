@@ -2072,9 +2072,18 @@
 .struct-row:last-child {
     border-bottom: none;
 }
+.struct-pk {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--fg-dim);
+    width: 44px;
+}
 .struct-col-name {
     font-weight: 600;
-    min-width: 120px;
+    min-width: 110px;
 }
 .struct-col-type {
     color: var(--fg-dim);

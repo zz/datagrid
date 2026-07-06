@@ -50,6 +50,12 @@ type SchemaEditor interface {
 	AddColumn(ctx context.Context, schema, table string, col ColumnSpec) error
 	DropColumn(ctx context.Context, schema, table, column string) error
 	RenameColumn(ctx context.Context, schema, table, column, newName string) error
+	// ModifyColumn changes an existing column's name, type, nullability, and
+	// default in one step (oldName identifies it; spec holds the new state).
+	ModifyColumn(ctx context.Context, schema, table, oldName string, spec ColumnSpec) error
+	// SetPrimaryKey replaces the table's primary key with the given columns;
+	// an empty slice drops the primary key.
+	SetPrimaryKey(ctx context.Context, schema, table string, columns []string) error
 	ListIndexes(ctx context.Context, schema, table string) ([]IndexInfo, error)
 	CreateIndex(ctx context.Context, schema, table string, spec IndexSpec) error
 	DropIndex(ctx context.Context, schema, table, name string) error
@@ -59,6 +65,12 @@ type SchemaEditor interface {
 // driver packages (e.g. for DROP INDEX, which they build themselves).
 func (d Dialect) QualifiedName(schema, name string) string {
 	return d.qualified(schema, name)
+}
+
+// ColumnDef exposes column-definition rendering to the driver packages (e.g.
+// MySQL's CHANGE COLUMN, which builds the statement itself).
+func (d Dialect) ColumnDef(col ColumnSpec) (string, error) {
+	return d.columnDef(col)
 }
 
 // columnDef renders one column definition, e.g. `"name" varchar(255) NOT NULL

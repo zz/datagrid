@@ -54,6 +54,40 @@ func (s *session) RenameColumn(ctx context.Context, schema, table, column, newNa
 	return s.exec(ctx, dialect.BuildRenameColumn(schema, table, column, newName))
 }
 
+// ModifyColumn uses CHANGE COLUMN, which renames and redefines the column in
+// one statement. spec carries the new name/type/nullability/default.
+func (s *session) ModifyColumn(ctx context.Context, schema, table, oldName string, spec drivers.ColumnSpec) error {
+	def, err := dialect.ColumnDef(spec)
+	if err != nil {
+		return err
+	}
+	return s.exec(ctx, fmt.Sprintf("ALTER TABLE %s CHANGE COLUMN %s %s", dialect.QualifiedName(schema, table), dialect.Quote(oldName), def))
+}
+
+func (s *session) SetPrimaryKey(ctx context.Context, schema, table string, columns []string) error {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM information_schema.table_constraints
+WHERE table_schema = ? AND table_name = ? AND constraint_type = 'PRIMARY KEY'`, schema, table).Scan(&n); err != nil {
+		return err
+	}
+	var actions []string
+	if n > 0 {
+		actions = append(actions, "DROP PRIMARY KEY")
+	}
+	if len(columns) > 0 {
+		cols := make([]string, len(columns))
+		for i, c := range columns {
+			cols[i] = dialect.Quote(c)
+		}
+		actions = append(actions, "ADD PRIMARY KEY ("+strings.Join(cols, ", ")+")")
+	}
+	if len(actions) == 0 {
+		return nil
+	}
+	return s.exec(ctx, fmt.Sprintf("ALTER TABLE %s %s", dialect.QualifiedName(schema, table), strings.Join(actions, ", ")))
+}
+
 func (s *session) ListIndexes(ctx context.Context, schema, table string) ([]drivers.IndexInfo, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT index_name,

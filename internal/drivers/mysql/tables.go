@@ -21,7 +21,7 @@ func (s *session) TableInfo(ctx context.Context, schema, table string) (*drivers
 	info := &drivers.TableInfo{Schema: schema, Table: table}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT column_name, column_type, is_nullable
+SELECT column_name, column_type, is_nullable, COALESCE(column_default, '')
 FROM information_schema.columns
 WHERE table_schema = ? AND table_name = ?
 ORDER BY ordinal_position`, schema, table)
@@ -30,12 +30,12 @@ ORDER BY ordinal_position`, schema, table)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var name, typ, nullable string
-		if err := rows.Scan(&name, &typ, &nullable); err != nil {
+		var name, typ, nullable, def string
+		if err := rows.Scan(&name, &typ, &nullable, &def); err != nil {
 			return nil, err
 		}
 		info.Columns = append(info.Columns, drivers.ColumnInfo{
-			Name: name, TypeName: typ, Nullable: nullable == "YES",
+			Name: name, TypeName: typ, Nullable: nullable == "YES", Default: def,
 		})
 	}
 	if err := rows.Err(); err != nil {

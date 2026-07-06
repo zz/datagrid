@@ -516,6 +516,26 @@ func (a *App) RenameColumn(connID, schema, table, column, newName string) error 
 	return se.RenameColumn(ctx, schema, table, column, newName)
 }
 
+func (a *App) ModifyColumn(connID, schema, table, oldName string, spec drivers.ColumnSpec) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.ModifyColumn(ctx, schema, table, oldName, spec)
+}
+
+func (a *App) SetPrimaryKey(connID, schema, table string, columns []string) error {
+	se, err := a.schemaEditor(connID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := a.ddlCtx()
+	defer cancel()
+	return se.SetPrimaryKey(ctx, schema, table, columns)
+}
+
 // ListIndexes is a read, so it works on read-only connections too (it uses the
 // session directly rather than the write-guarded schemaEditor).
 func (a *App) ListIndexes(connID, schema, table string) ([]drivers.IndexInfo, error) {

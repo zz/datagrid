@@ -25,10 +25,12 @@ func (s *session) TableInfo(ctx context.Context, schema, table string) (*drivers
 	info := &drivers.TableInfo{Schema: schema, Table: table}
 
 	rows, err := s.pool.Query(ctx, `
-SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull
+SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull,
+       COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid), '')
 FROM pg_catalog.pg_attribute a
 JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
 WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
 ORDER BY a.attnum`, schema, table)
 	if err != nil {
@@ -36,12 +38,12 @@ ORDER BY a.attnum`, schema, table)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var name, typ string
+		var name, typ, def string
 		var notnull bool
-		if err := rows.Scan(&name, &typ, &notnull); err != nil {
+		if err := rows.Scan(&name, &typ, &notnull, &def); err != nil {
 			return nil, err
 		}
-		info.Columns = append(info.Columns, drivers.ColumnInfo{Name: name, TypeName: typ, Nullable: !notnull})
+		info.Columns = append(info.Columns, drivers.ColumnInfo{Name: name, TypeName: typ, Nullable: !notnull, Default: def})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

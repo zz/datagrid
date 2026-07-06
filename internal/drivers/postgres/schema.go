@@ -2,6 +2,11 @@ package postgres
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
 
 	"datagrid/internal/drivers"
 )
@@ -50,6 +55,61 @@ func (s *session) DropColumn(ctx context.Context, schema, table, column string) 
 
 func (s *session) RenameColumn(ctx context.Context, schema, table, column, newName string) error {
 	return s.exec(ctx, dialect.BuildRenameColumn(schema, table, column, newName))
+}
+
+// ModifyColumn renames (if the name changed) then alters type/nullability/
+// default in a single ALTER TABLE with multiple actions.
+func (s *session) ModifyColumn(ctx context.Context, schema, table, oldName string, spec drivers.ColumnSpec) error {
+	q := dialect.QualifiedName(schema, table)
+	name := oldName
+	if spec.Name != "" && spec.Name != oldName {
+		if err := s.exec(ctx, fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", q, dialect.Quote(oldName), dialect.Quote(spec.Name))); err != nil {
+			return err
+		}
+		name = spec.Name
+	}
+	col := dialect.Quote(name)
+	actions := []string{}
+	if strings.TrimSpace(spec.Type) != "" {
+		actions = append(actions, fmt.Sprintf("ALTER COLUMN %s TYPE %s", col, spec.Type))
+	}
+	if spec.Nullable {
+		actions = append(actions, fmt.Sprintf("ALTER COLUMN %s DROP NOT NULL", col))
+	} else {
+		actions = append(actions, fmt.Sprintf("ALTER COLUMN %s SET NOT NULL", col))
+	}
+	if strings.TrimSpace(spec.Default) != "" {
+		actions = append(actions, fmt.Sprintf("ALTER COLUMN %s SET DEFAULT %s", col, spec.Default))
+	} else {
+		actions = append(actions, fmt.Sprintf("ALTER COLUMN %s DROP DEFAULT", col))
+	}
+	return s.exec(ctx, fmt.Sprintf("ALTER TABLE %s %s", q, strings.Join(actions, ", ")))
+}
+
+func (s *session) SetPrimaryKey(ctx context.Context, schema, table string, columns []string) error {
+	q := dialect.QualifiedName(schema, table)
+	// A primary key is a named constraint; find its name to drop it.
+	var conname string
+	err := s.pool.QueryRow(ctx,
+		`SELECT conname FROM pg_constraint WHERE conrelid = format('%I.%I', $1::text, $2::text)::regclass AND contype = 'p'`,
+		schema, table).Scan(&conname)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if conname != "" {
+		if err := s.exec(ctx, fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT %s", q, dialect.Quote(conname))); err != nil {
+			return err
+		}
+	}
+	if len(columns) > 0 {
+		cols := make([]string, len(columns))
+		for i, c := range columns {
+			cols[i] = dialect.Quote(c)
+		}
+		// ADD PRIMARY KEY implicitly sets NOT NULL on the key columns.
+		return s.exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD PRIMARY KEY (%s)", q, strings.Join(cols, ", ")))
+	}
+	return nil
 }
 
 func (s *session) ListIndexes(ctx context.Context, schema, table string) ([]drivers.IndexInfo, error) {

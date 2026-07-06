@@ -2,11 +2,14 @@ package drivers
 
 import "context"
 
-// ColumnInfo describes one column of a table for the data editor.
+// ColumnInfo describes one column of a table for the data editor. Default is
+// the column's raw default expression (empty if none), used by the structure
+// editor so an ALTER doesn't silently drop it.
 type ColumnInfo struct {
 	Name     string `json:"name"`
 	TypeName string `json:"typeName"`
 	Nullable bool   `json:"nullable"`
+	Default  string `json:"default"`
 }
 
 // TableInfo is the metadata the table-data grid needs. An empty PrimaryKey
