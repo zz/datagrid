@@ -19,6 +19,8 @@ import {
     RedisScan,
     RedisSetString,
     RedisSetTTL,
+    SaveConnection,
+    SwitchDatabase,
     RunQuery,
 } from '../wailsjs/go/api/App'
 import { drivers } from '../wailsjs/go/models'
@@ -161,6 +163,9 @@ interface AppState {
     connect: (connId: string) => Promise<void>
     disconnect: (connId: string) => Promise<void>
     removeConnection: (connId: string) => Promise<void>
+    setConnectionGroup: (connId: string, group: string) => Promise<void>
+    renameGroup: (oldName: string, newName: string) => Promise<void>
+    switchDatabase: (connId: string, database: string) => Promise<void>
     openDialog: (editing?: drivers.ConnectionConfig) => void
     closeDialog: () => void
     openQueryTab: (connId: string) => void
@@ -260,6 +265,35 @@ export const useApp = create<AppState>((set, get) => ({
             tabs: s.tabs.filter(t => t.connId !== connId),
             connected: { ...s.connected, [connId]: false },
         }))
+    },
+
+    // Reassign a connection's sidebar folder. Saved with an empty password so
+    // the Keychain secret is preserved.
+    setConnectionGroup: async (connId, group) => {
+        const c = get().connections.find(x => x.id === connId)
+        if (!c || c.group === group) return
+        await SaveConnection(drivers.ConnectionConfig.createFrom({ ...c, group }), '')
+        await get().loadConnections()
+    },
+
+    renameGroup: async (oldName, newName) => {
+        for (const c of get().connections.filter(x => x.group === oldName)) {
+            await SaveConnection(drivers.ConnectionConfig.createFrom({ ...c, group: newName }), '')
+        }
+        await get().loadConnections()
+    },
+
+    switchDatabase: async (connId, database) => {
+        try {
+            await SwitchDatabase(connId, database)
+            await get().loadConnections()
+            // Refresh autocomplete for the new database.
+            GetAutocomplete(connId)
+                .then(m => set(s => ({ autocomplete: { ...s.autocomplete, [connId]: m ?? {} } })))
+                .catch(() => {})
+        } catch (err) {
+            set({ lastError: String(err) })
+        }
     },
 
     openDialog: (editing) => set({ dialog: { open: true, editing: editing ?? null } }),

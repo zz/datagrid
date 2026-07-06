@@ -1904,3 +1904,53 @@
     color: #ff453a;
     border-color: #ff453a;
 }
+
+/* Drag-to-group */
+
+.drop-zone {
+    min-height: 4px;
+}
+
+.drop-zone.over,
+.conn-group.over {
+    background-color: rgba(10, 132, 255, 0.12);
+    border-radius: 6px;
+    outline: 1px dashed var(--accent);
+}
+
+.drop-hint {
+    padding: 6px 12px;
+    color: var(--accent);
+    font-size: 11px;
+    text-align: center;
+}
+
+.tree-row[draggable='true'] {
+    cursor: grab;
+}
+
+.name-dialog {
+    width: 360px;
+}
+
+.name-dialog input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg);
+    font-size: 13px;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.db-select {
+    padding: 3px 6px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg);
+    font-size: 12px;
+    max-width: 160px;
+}

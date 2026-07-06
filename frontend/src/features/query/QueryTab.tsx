@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { format as formatSql } from 'sql-formatter'
 import SqlEditor from '../../components/SqlEditor'
 import ResultsGrid from '../../components/ResultsGrid'
 import PlanTree from '../../components/PlanTree'
-import { ExplainQuery } from '../../../wailsjs/go/api/App'
+import { ExplainQuery, ServerDatabases } from '../../../wailsjs/go/api/App'
 import { drivers } from '../../../wailsjs/go/models'
 import { useApp, Tab } from '../../store'
 import { useSettings } from '../../settings'
@@ -22,10 +22,21 @@ export default function QueryTab({ tab }: { tab: Tab }) {
     const q = useApp(s => s.queries[tab.id])
     const conn = useApp(s => s.connections.find(c => c.id === tab.connId))
     const schema = useApp(s => s.autocomplete[tab.connId])
-    const { runQuery, cancelQuery, setTabSql, setError } = useApp()
+    const { runQuery, cancelQuery, setTabSql, setError, switchDatabase } = useApp()
     const MAX_ROWS = useSettings(s => s.rowLimit)
     const [confirm, setConfirm] = useState<string | null>(null)
     const [plan, setPlan] = useState<drivers.PlanNode | null>(null)
+    const [databases, setDatabases] = useState<string[]>([])
+
+    // Fetch the server's databases for the active-database selector.
+    useEffect(() => {
+        if (conn && conn.engine !== 'redis') {
+            ServerDatabases(tab.connId)
+                .then(l => setDatabases(l ?? []))
+                .catch(() => {})
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tab.connId, conn?.engine, conn?.database])
 
     if (!q) return null
 
@@ -87,6 +98,19 @@ export default function QueryTab({ tab }: { tab: Tab }) {
                 <button className="primary" disabled={q.running} onClick={() => run(tab.sql)} title="Run (⌘⏎)">
                     ▶ Run
                 </button>
+                <select
+                    className="db-select"
+                    value={conn?.database ?? ''}
+                    onChange={e => switchDatabase(tab.connId, e.target.value)}
+                    title="Active database"
+                >
+                    {!conn?.database && <option value="">(no database)</option>}
+                    {[...new Set([conn?.database, ...databases])].filter(Boolean).map(d => (
+                        <option key={d} value={d}>
+                            {d}
+                        </option>
+                    ))}
+                </select>
                 <button disabled={!q.running} onClick={() => cancelQuery(tab.id)}>
                     ■ Cancel
                 </button>
