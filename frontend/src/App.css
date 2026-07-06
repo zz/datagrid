@@ -2043,6 +2043,82 @@
     font-size: 12px;
 }
 
+/* Unified table structure dialog (columns + indexes). */
+.structure-dialog {
+    width: 620px;
+    max-width: 92vw;
+}
+.struct-section-title {
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    margin: 14px 0 6px;
+}
+.struct-list {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    max-height: 160px;
+    overflow: auto;
+}
+.struct-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+}
+.struct-row:last-child {
+    border-bottom: none;
+}
+.struct-col-name {
+    font-weight: 600;
+    min-width: 120px;
+}
+.struct-col-type {
+    color: var(--fg-dim);
+    font-family: ui-monospace, monospace;
+}
+.struct-flag {
+    font-size: 10px;
+    color: var(--fg-dim);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 4px;
+}
+.struct-rename {
+    flex: 1;
+    padding: 3px 8px;
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg);
+    font-size: 12px;
+    user-select: text;
+    -webkit-user-select: text;
+}
+.struct-add {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 8px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+}
+.struct-add > input {
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background-color: var(--bg-sidebar);
+    color: var(--fg);
+    font-size: 12px;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
 /* Index manager dialog. */
 .index-list {
     margin: 10px 0;

@@ -2,7 +2,7 @@ import { useState } from 'react'
 
 // Column type presets per engine. The field is free-text (with suggestions),
 // so anything the engine accepts still works.
-const TYPE_PRESETS: Record<string, string[]> = {
+export const TYPE_PRESETS: Record<string, string[]> = {
     postgres: ['integer', 'bigint', 'bigserial', 'text', 'varchar(255)', 'boolean', 'numeric', 'timestamptz', 'date', 'jsonb', 'uuid'],
     mysql: ['int', 'bigint', 'varchar(255)', 'text', 'tinyint(1)', 'decimal(10,2)', 'datetime', 'date', 'json', 'double'],
 }
@@ -107,54 +107,3 @@ export function CreateTableDialog({
     )
 }
 
-// AddColumnDialog collects a single column definition to add to a table.
-export function AddColumnDialog({
-    engine,
-    table,
-    onCancel,
-    onSubmit,
-}: {
-    engine: string
-    table: string
-    onCancel: () => void
-    onSubmit: (col: ColumnDraft) => void
-}) {
-    const [col, setCol] = useState<ColumnDraft>({ ...emptyColumn(), nullable: true })
-    const presets = TYPE_PRESETS[engine] ?? TYPE_PRESETS.postgres
-    const valid = col.name.trim() !== '' && col.type.trim() !== ''
-    return (
-        <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onCancel()}>
-            <div className="modal ddl-dialog">
-                <h2>Add column to {table}</h2>
-                <datalist id="ddl-types-add">
-                    {presets.map(t => (
-                        <option key={t} value={t} />
-                    ))}
-                </datalist>
-                <label className="ddl-field">
-                    <span>Name</span>
-                    <input autoFocus value={col.name} onChange={e => setCol({ ...col, name: e.target.value })} placeholder="column" />
-                </label>
-                <label className="ddl-field">
-                    <span>Type</span>
-                    <input list="ddl-types-add" value={col.type} onChange={e => setCol({ ...col, type: e.target.value })} placeholder="type" />
-                </label>
-                <label className="ddl-field">
-                    <span>Default</span>
-                    <input value={col.default} onChange={e => setCol({ ...col, default: e.target.value })} placeholder="— (none)" />
-                </label>
-                <label className="ddl-check">
-                    <input type="checkbox" checked={col.nullable} onChange={e => setCol({ ...col, nullable: e.target.checked })} />
-                    Allow NULL
-                </label>
-                <div className="modal-buttons">
-                    <div className="spacer" />
-                    <button onClick={onCancel}>Cancel</button>
-                    <button className="primary" disabled={!valid} onClick={() => onSubmit(col)}>
-                        Add column
-                    </button>
-                </div>
-            </div>
-        </div>
-    )
-}
