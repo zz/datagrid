@@ -1755,6 +1755,39 @@
     letter-spacing: 0.03em;
 }
 
+/* Autocomplete-input wrapper + dropdown (WHERE filter column suggestions). */
+.ac-input-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 200px;
+    display: flex;
+}
+.ac-list {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    z-index: 50;
+    min-width: 180px;
+    max-height: 240px;
+    overflow: auto;
+    background-color: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    padding: 4px;
+}
+.ac-item {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+.ac-item.active {
+    background-color: var(--accent);
+    color: #fff;
+}
+
 .where-input {
     flex: 1;
     min-width: 200px;

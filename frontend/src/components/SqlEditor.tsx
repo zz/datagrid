@@ -3,6 +3,7 @@ import { EditorView, keymap } from '@codemirror/view'
 import { basicSetup } from 'codemirror'
 import { Compartment, Prec } from '@codemirror/state'
 import { sql, MySQL, PostgreSQL } from '@codemirror/lang-sql'
+import { CompletionContext, Completion, CompletionResult } from '@codemirror/autocomplete'
 
 interface Props {
     engine: string // 'postgres' | 'mysql'
@@ -17,12 +18,61 @@ interface Props {
     onRun: (statement: string) => void
 }
 
+// CodeMirror's lang-sql resolves columns from a nested namespace
+// ({schema: {table: [cols]}}), not the flat "schema.table" → cols map we get
+// from the backend. Convert so column completion works after a qualified table.
+type Namespace = Record<string, string[] | Record<string, string[]>>
+function toNamespace(flat?: Record<string, string[]>): Namespace | undefined {
+    if (!flat) return undefined
+    const ns: Namespace = {}
+    for (const [key, cols] of Object.entries(flat)) {
+        const dot = key.indexOf('.')
+        if (dot === -1) {
+            ns[key] = cols
+            continue
+        }
+        const schema = key.slice(0, dot)
+        const table = key.slice(dot + 1)
+        const bucket = (ns[schema] ??= {}) as Record<string, string[]>
+        bucket[table] = cols
+    }
+    return ns
+}
+
+// columnCompletionSource offers column names for a bare identifier (e.g. in a
+// WHERE clause). lang-sql's own schema completion only surfaces a table's
+// columns after "table."/"alias.", not for FROM-clause columns typed bare, so
+// this supplements it with a deduped list of all columns (table shown as
+// detail). Table-qualified completion and keywords still come from lang-sql.
+function columnCompletionSource(flat?: Record<string, string[]>) {
+    const byCol = new Map<string, Set<string>>()
+    for (const [key, cols] of Object.entries(flat ?? {})) {
+        const table = key.includes('.') ? key.slice(key.indexOf('.') + 1) : key
+        for (const c of cols) {
+            if (!byCol.has(c)) byCol.set(c, new Set())
+            byCol.get(c)!.add(table)
+        }
+    }
+    const options: Completion[] = [...byCol.entries()].map(([col, tables]) => ({
+        label: col,
+        type: 'property',
+        detail: [...tables].slice(0, 3).join(', '),
+    }))
+    return (context: CompletionContext): CompletionResult | null => {
+        const word = context.matchBefore(/[\w]+/)
+        if (!word || (word.from === word.to && !context.explicit)) return null
+        return { from: word.from, options, validFor: /^\w*$/ }
+    }
+}
+
 function sqlExtension({ engine, schema, defaultSchema }: Pick<Props, 'engine' | 'schema' | 'defaultSchema'>) {
-    return sql({
+    const support = sql({
         dialect: engine === 'mysql' ? MySQL : PostgreSQL,
-        schema,
+        schema: toNamespace(schema),
         defaultSchema,
     })
+    // Register the column source as an extra autocomplete source for SQL.
+    return [support, support.language.data.of({ autocomplete: columnCompletionSource(schema) })]
 }
 
 export default function SqlEditor({ engine, schema, defaultSchema, value, onChange, onRun }: Props) {

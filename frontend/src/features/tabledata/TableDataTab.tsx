@@ -20,6 +20,7 @@ import ImportDialog from './ImportDialog'
 import CopyButton from '../../components/CopyButton'
 import ContextMenu, { MenuItem } from '../../components/ContextMenu'
 import CellInspector from '../../components/CellInspector'
+import ColumnFilterInput from '../../components/ColumnFilterInput'
 
 const FILTER_OPS = ['contains', '=', '!=', '<', '>', '<=', '>=', 'starts']
 
@@ -275,13 +276,13 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
 
             <div className="table-filterbar">
                 <span className="where-label">WHERE</span>
-                <input
+                <ColumnFilterInput
                     className="where-input"
                     placeholder="SQL filter, e.g. id > 100 AND created_at > '1999-01-01'"
                     value={whereDraft}
-                    onChange={e => setWhereDraft(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && setTableWhere(tab.id, whereDraft)}
-                    spellCheck={false}
+                    onChange={setWhereDraft}
+                    onSubmit={() => setTableWhere(tab.id, whereDraft)}
+                    columns={view.columns.map(c => c.name)}
                 />
                 <button onClick={() => setTableWhere(tab.id, whereDraft)}>Apply</button>
                 {view.whereRaw && (
