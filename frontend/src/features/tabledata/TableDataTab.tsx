@@ -25,8 +25,10 @@ const FILTER_OPS = ['contains', '=', '!=', '<', '>', '<=', '>=', 'starts']
 
 export default function TableDataTab({ tab }: { tab: Tab }) {
     const view = useApp(s => s.tableViews[tab.id])
+    const conn = useApp(s => s.connections.find(c => c.id === tab.connId))
     const PAGE_SIZE = useSettings(s => s.pageSize)
     const {
+        setConnectionReadOnly,
         setTableSort,
         setTableFilters,
         setTableWhere,
@@ -66,7 +68,10 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
         return () => ro.disconnect()
     }, [])
 
-    const editable = !!view?.info && view.info.primaryKey.length > 0
+    const readOnly = !!conn?.readOnly
+    // A read-only connection blocks all edits; a missing PK/unique key means we
+    // can't target a row. Editing needs both a key and a writable connection.
+    const editable = !!view?.info && view.info.primaryKey.length > 0 && !readOnly
 
     // Client-side text search over the loaded page. shownIndex maps a grid
     // row back to its index in view.rows so edits still target the right row.
@@ -208,6 +213,14 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
     return (
         <div className="table-tab">
             <div className="table-toolbar">
+                <button
+                    className={`ro-toggle ${readOnly ? 'locked' : ''}`}
+                    onClick={() => setConnectionReadOnly(tab.connId, !readOnly)}
+                    title={readOnly ? 'Read-only — click to allow edits' : 'Writable — click to lock (read-only)'}
+                >
+                    {readOnly ? '🔒 Read-only' : '🔓 Writable'}
+                </button>
+                <span className="tb-sep" />
                 <button onClick={() => stageInsert(tab.id)} disabled={!editable} title="Add a new row">
                     + Row
                 </button>
@@ -336,7 +349,13 @@ export default function TableDataTab({ tab }: { tab: Tab }) {
                 )}
             </div>
 
-            {view.info && !editable && (
+            {readOnly && (
+                <div className="table-banner">
+                    This connection is read-only{conn?.envLabel === 'prod' ? ' (production)' : ''}. Click{' '}
+                    <b>🔒 Read-only</b> in the toolbar to allow edits.
+                </div>
+            )}
+            {view.info && !readOnly && !editable && (
                 <div className="table-banner">
                     Read-only: this table has no primary or unique key, so edits can’t be targeted to a specific row.
                 </div>

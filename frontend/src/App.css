@@ -543,6 +543,27 @@
     border-bottom: 1px solid var(--border);
 }
 
+/* Read-only chip in the query toolbar. */
+.ro-chip {
+    font-size: 12px;
+    font-weight: 600;
+    color: #b26b00;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background-color: rgba(255, 159, 10, 0.12);
+    white-space: nowrap;
+}
+
+/* Read-only lock toggle in the table toolbar. */
+.table-toolbar button.ro-toggle {
+    font-weight: 600;
+}
+.table-toolbar button.ro-toggle.locked {
+    color: #b26b00;
+    border-color: rgba(255, 159, 10, 0.5);
+    background-color: rgba(255, 159, 10, 0.12);
+}
+
 .table-error {
     padding: 6px 12px;
     background-color: rgba(255, 69, 58, 0.12);

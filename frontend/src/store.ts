@@ -20,6 +20,7 @@ import {
     RedisSetString,
     RedisSetTTL,
     SaveConnection,
+    SetReadOnly,
     SwitchDatabase,
     RunQuery,
 } from '../wailsjs/go/api/App'
@@ -164,6 +165,7 @@ interface AppState {
     disconnect: (connId: string) => Promise<void>
     removeConnection: (connId: string) => Promise<void>
     setConnectionGroup: (connId: string, group: string) => Promise<void>
+    setConnectionReadOnly: (connId: string, readOnly: boolean) => Promise<void>
     renameGroup: (oldName: string, newName: string) => Promise<void>
     switchDatabase: (connId: string, database: string) => Promise<void>
     openDialog: (editing?: drivers.ConnectionConfig) => void
@@ -274,6 +276,17 @@ export const useApp = create<AppState>((set, get) => ({
         const c = get().connections.find(x => x.id === connId)
         if (!c || c.group === group) return
         await SaveConnection(drivers.ConnectionConfig.createFrom({ ...c, group }), '')
+        await get().loadConnections()
+    },
+
+    // Toggle a connection's read-only flag. Persists to the saved config and,
+    // if the connection is open, applies to the live session immediately so no
+    // reconnect is needed (best-effort — ignored when not connected).
+    setConnectionReadOnly: async (connId, readOnly) => {
+        const c = get().connections.find(x => x.id === connId)
+        if (!c || !!c.readOnly === readOnly) return
+        await SaveConnection(drivers.ConnectionConfig.createFrom({ ...c, readOnly }), '')
+        await SetReadOnly(connId, readOnly).catch(() => {})
         await get().loadConnections()
     },
 

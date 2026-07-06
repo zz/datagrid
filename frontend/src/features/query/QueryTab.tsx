@@ -111,6 +111,11 @@ export default function QueryTab({ tab }: { tab: Tab }) {
                         </option>
                     ))}
                 </select>
+                {conn?.readOnly && (
+                    <span className="ro-chip" title="This connection is read-only; only SELECT-style statements will run.">
+                        🔒 Read-only
+                    </span>
+                )}
                 <button disabled={!q.running} onClick={() => cancelQuery(tab.id)}>
                     ■ Cancel
                 </button>
