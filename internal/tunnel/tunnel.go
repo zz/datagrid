@@ -35,8 +35,13 @@ type Manager struct {
 }
 
 type sharedClient struct {
-	client *ssh.Client
+	cfg  *drivers.SSHCfg
+	auth Auth
+
+	mu     sync.Mutex
+	client *ssh.Client // nil after the transport died; re-dialed on next use
 	leases int
+	closed bool
 }
 
 // NewManager creates an empty tunnel manager.
@@ -50,7 +55,9 @@ func key(cfg *drivers.SSHCfg) string {
 
 // Lease returns a dialer that tunnels through the SSH host in cfg,
 // opening the SSH client on first use. Call Release with the same cfg
-// when the database pool using it closes.
+// when the database pool using it closes. The dialer survives transport
+// loss: a client whose TCP dies (NAT timeout, server restart) is replaced
+// on the next dial instead of failing every connection until app restart.
 func (m *Manager) Lease(ctx context.Context, cfg *drivers.SSHCfg, auth Auth) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -58,34 +65,146 @@ func (m *Manager) Lease(ctx context.Context, cfg *drivers.SSHCfg, auth Auth) (fu
 	k := key(cfg)
 	sc, ok := m.clients[k]
 	if !ok {
-		client, err := dial(ctx, cfg, auth)
-		if err != nil {
+		sc = &sharedClient{cfg: cfg, auth: auth}
+		// Dial eagerly so a bad host/auth fails the connect, not the first query.
+		if _, err := sc.live(ctx); err != nil {
 			return nil, err
 		}
-		sc = &sharedClient{client: client}
 		m.clients[k] = sc
 	}
 	sc.leases++
+	return sc.dialThrough, nil
+}
 
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		// ssh.Client.Dial has no context variant; guard with a deadline
-		// goroutine only if the context carries one.
-		type res struct {
-			c   net.Conn
-			err error
-		}
-		ch := make(chan res, 1)
-		go func() {
-			c, err := sc.client.Dial(network, addr)
-			ch <- res{c, err}
-		}()
+// live returns the current SSH client, re-dialing if the previous transport
+// died. Dialing holds the lock so concurrent callers share one attempt.
+func (sc *sharedClient) live(ctx context.Context) (*ssh.Client, error) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if sc.closed {
+		return nil, errors.New("ssh tunnel closed")
+	}
+	if sc.client != nil {
+		return sc.client, nil
+	}
+	client, err := dial(ctx, sc.cfg, sc.auth)
+	if err != nil {
+		return nil, err
+	}
+	sc.client = client
+	go sc.watch(client)
+	return client, nil
+}
+
+// invalidate drops client if it is still current, so the next dial rebuilds.
+func (sc *sharedClient) invalidate(client *ssh.Client) {
+	sc.mu.Lock()
+	if sc.client == client {
+		sc.client = nil
+	}
+	sc.mu.Unlock()
+	client.Close()
+}
+
+func (sc *sharedClient) shutdown() {
+	sc.mu.Lock()
+	sc.closed = true
+	client := sc.client
+	sc.client = nil
+	sc.mu.Unlock()
+	if client != nil {
+		client.Close()
+	}
+}
+
+// watch keeps the transport healthy for the client's lifetime: periodic
+// keepalives stop NAT/firewall idle timeouts from silently dropping the
+// mapping, and detect a dead transport within a minute instead of on the
+// next failed query. Ends when the transport closes (Wait returns).
+func (sc *sharedClient) watch(client *ssh.Client) {
+	done := make(chan struct{})
+	go func() {
+		_ = client.Wait()
+		close(done)
+	}()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
 		select {
-		case r := <-ch:
-			return r.c, r.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		case <-done:
+			sc.invalidate(client)
+			return
+		case <-ticker.C:
+			if !alive(client) {
+				client.Close() // Wait returns; the done case invalidates
+			}
 		}
-	}, nil
+	}
+}
+
+// alive reports whether the SSH transport still answers a keepalive request.
+// A NAT-dropped socket accepts the write but never replies, so no answer
+// within the timeout means dead.
+func alive(client *ssh.Client) bool {
+	ch := make(chan error, 1)
+	go func() {
+		_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+		ch <- err
+	}()
+	select {
+	case err := <-ch:
+		return err == nil
+	case <-time.After(3 * time.Second):
+		return false
+	}
+}
+
+// dialThrough opens a connection to the database through the tunnel. If the
+// dial fails because the SSH transport died since the last keepalive, the
+// client is rebuilt and the dial retried once.
+func (sc *sharedClient) dialThrough(ctx context.Context, network, addr string) (net.Conn, error) {
+	client, err := sc.live(ctx)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := dialVia(ctx, client, network, addr)
+	if err == nil {
+		return conn, nil
+	}
+	if alive(client) {
+		return nil, err // live tunnel; the DB endpoint itself failed
+	}
+	sc.invalidate(client)
+	client, rerr := sc.live(ctx)
+	if rerr != nil {
+		return nil, rerr
+	}
+	return dialVia(ctx, client, network, addr)
+}
+
+// dialVia runs client.Dial under ctx: ssh.Client.Dial has no context
+// variant, so guard it with a goroutine and reap the conn if abandoned.
+func dialVia(ctx context.Context, client *ssh.Client, network, addr string) (net.Conn, error) {
+	type res struct {
+		c   net.Conn
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		c, err := client.Dial(network, addr)
+		ch <- res{c, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.c, r.err
+	case <-ctx.Done():
+		go func() {
+			if r := <-ch; r.c != nil {
+				r.c.Close()
+			}
+		}()
+		return nil, ctx.Err()
+	}
 }
 
 // Release drops one lease on the SSH client for cfg, closing it when the
@@ -100,7 +219,7 @@ func (m *Manager) Release(cfg *drivers.SSHCfg) {
 	}
 	sc.leases--
 	if sc.leases <= 0 {
-		sc.client.Close()
+		sc.shutdown()
 		delete(m.clients, k)
 	}
 }
@@ -110,7 +229,7 @@ func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for k, sc := range m.clients {
-		sc.client.Close()
+		sc.shutdown()
 		delete(m.clients, k)
 	}
 }

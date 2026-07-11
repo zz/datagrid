@@ -209,6 +209,9 @@ interface AppState {
     // looks like a dropped/unreachable connection, so the UI stops implying
     // it is still live.
     markMaybeDisconnected: (connId: string, err: unknown) => void
+    // Flip the dot back to connected after an op succeeds — the backend
+    // tunnel/pool self-heals, so a past failure shouldn't grey it forever.
+    markAlive: (connId: string) => void
     setError: (msg: string | null) => void
 }
 
@@ -485,7 +488,10 @@ export const useApp = create<AppState>((set, get) => ({
                 queries: { ...s.queries, [tabId]: { ...q, running: false, summary } },
             }
         })
-        if (summary.error && connId) get().markMaybeDisconnected(connId, summary.error)
+        if (connId) {
+            if (summary.error) get().markMaybeDisconnected(connId, summary.error)
+            else get().markAlive(connId)
+        }
     },
 
     reloadTable: async (tabId, recount) => {
@@ -508,6 +514,7 @@ export const useApp = create<AppState>((set, get) => ({
                 info = await OpenTable(tab.connId, tab.schema!, tab.table!)
             }
             const page = await LoadTableRows(tab.connId, req)
+            get().markAlive(tab.connId)
             setView(set, tabId, {
                 info,
                 columns: page.columns ?? [],
@@ -652,6 +659,7 @@ export const useApp = create<AppState>((set, get) => ({
                 }),
             )
             const keys = res.keys ?? []
+            get().markAlive(tab.connId)
             setRedis(set, tabId, {
                 keys: reset ? keys : [...view.keys, ...keys],
                 cursor: res.cursor,
@@ -757,6 +765,10 @@ export const useApp = create<AppState>((set, get) => ({
         if (looksDisconnected(String(err))) {
             set(s => ({ connected: { ...s.connected, [connId]: false } }))
         }
+    },
+
+    markAlive: (connId) => {
+        set(s => (s.connected[connId] === false ? { connected: { ...s.connected, [connId]: true } } : {}))
     },
 
     setError: (msg) => set({ lastError: msg }),

@@ -76,6 +76,9 @@ func (d *myDriver) Connect(ctx context.Context, cfg *drivers.ConnectionConfig, o
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxIdleTime(5 * time.Minute)
+	// Recycle before server wait_timeout / middlebox idle limits kill the
+	// socket under us (go-sql-driver README recommendation).
+	db.SetConnMaxLifetime(30 * time.Minute)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, err
