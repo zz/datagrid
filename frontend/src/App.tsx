@@ -1,28 +1,29 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Clock3, Command, Database, FileSearch, PanelLeft, Search, Settings } from 'lucide-react'
 import './App.css'
 import { GetAppInfo } from '../wailsjs/go/api/App'
 import { useApp } from './store'
 import { onQueryBatch, onQueryDone } from './ipc/events'
 import Sidebar from './features/connections/Sidebar'
-import ConnectionDialog from './features/connections/ConnectionDialog'
-import QueryTab from './features/query/QueryTab'
-import TableDataTab from './features/tabledata/TableDataTab'
-import RedisTab from './features/redis/RedisTab'
-import HistoryPanel from './features/history/HistoryPanel'
 import GoToPalette from './features/navigation/GoToPalette'
 import ErrorBoundary from './components/ErrorBoundary'
 import ContextMenu, { MenuItem } from './components/ContextMenu'
 import CopyButton from './components/CopyButton'
-import SettingsDialog from './features/settings/SettingsDialog'
-import ConnectionManager from './features/connections/ConnectionManager'
 import { applyTheme, useSettings } from './settings'
 import { useWorkspace } from './workspace'
 import ResizeHandle from './components/ResizeHandle'
 import CommandPalette from './features/navigation/CommandPalette'
 import { createWorkbenchCommands, displayShortcut, matchesShortcut } from './commands'
 import NameDialog from './components/NameDialog'
-import DatabaseSearchDialog from './features/search/DatabaseSearchDialog'
+
+const QueryTab = lazy(() => import('./features/query/QueryTab'))
+const TableDataTab = lazy(() => import('./features/tabledata/TableDataTab'))
+const RedisTab = lazy(() => import('./features/redis/RedisTab'))
+const HistoryPanel = lazy(() => import('./features/history/HistoryPanel'))
+const SettingsDialog = lazy(() => import('./features/settings/SettingsDialog'))
+const ConnectionManager = lazy(() => import('./features/connections/ConnectionManager'))
+const ConnectionDialog = lazy(() => import('./features/connections/ConnectionDialog'))
+const DatabaseSearchDialog = lazy(() => import('./features/search/DatabaseSearchDialog'))
 
 function App() {
     const [version, setVersion] = useState('')
@@ -229,13 +230,15 @@ function App() {
                         tabs.map(t => (
                             <div key={t.id} className="tab-pane" style={{ display: t.id === activeTabId ? 'flex' : 'none' }}>
                                 <ErrorBoundary resetKey={t.id} compact label="This tab">
-                                    {t.kind === 'table' ? (
-                                        <TableDataTab tab={t} />
-                                    ) : t.kind === 'redis' ? (
-                                        <RedisTab tab={t} />
-                                    ) : (
-                                        <QueryTab tab={t} />
-                                    )}
+                                    <Suspense fallback={<div className="workbench-loading">Loading editor…</div>}>
+                                        {t.kind === 'table' ? (
+                                            <TableDataTab tab={t} />
+                                        ) : t.kind === 'redis' ? (
+                                            <RedisTab tab={t} />
+                                        ) : (
+                                            <QueryTab tab={t} />
+                                        )}
+                                    </Suspense>
                                 </ErrorBoundary>
                             </div>
                         ))
@@ -254,7 +257,7 @@ function App() {
                             onResize={delta => setBottomPanelHeight(bottomPanelHeight - delta)}
                         />
                         <div className="bottom-tool-window" style={{ height: bottomPanelHeight }}>
-                            <HistoryPanel />
+                            <Suspense fallback={<div className="workbench-loading">Loading history…</div>}><HistoryPanel /></Suspense>
                         </div>
                     </>
                 )}
@@ -275,9 +278,12 @@ function App() {
             </div>
             {paletteOpen && <GoToPalette onClose={() => setPaletteOpen(false)} />}
             {commandOpen && <CommandPalette commands={commands} onClose={() => setCommandOpen(false)} />}
-            {databaseSearchOpen && <DatabaseSearchDialog initialConnId={activeConnectionId} onClose={() => setDatabaseSearchOpen(false)} />}
-            {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
-            {managerOpen && <ConnectionManager onClose={() => setManagerOpen(false)} />}
+            <Suspense fallback={<div className="modal-backdrop"><div className="workbench-loading modal-loading">Loading…</div></div>}>
+                {databaseSearchOpen && <DatabaseSearchDialog initialConnId={activeConnectionId} onClose={() => setDatabaseSearchOpen(false)} />}
+                {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+                {managerOpen && <ConnectionManager onClose={() => setManagerOpen(false)} />}
+                {dialog.open && <ConnectionDialog key={dialog.editing?.id ?? 'new'} />}
+            </Suspense>
             {renameTabId && (
                 <NameDialog
                     title="Rename Console"
@@ -289,7 +295,6 @@ function App() {
                     }}
                 />
             )}
-            {dialog.open && <ConnectionDialog key={dialog.editing?.id ?? 'new'} />}
             {tabMenu && (
                 <ContextMenu x={tabMenu.x} y={tabMenu.y} items={tabMenuItems(tabMenu.tabId)} onClose={() => setTabMenu(null)} />
             )}
