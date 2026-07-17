@@ -1,14 +1,11 @@
 package mysql
 
-// Integration test against a local MySQL, gated on DATAGRID_TEST_MYSQL=1 so
-// CI stays hermetic. On this machine the fixture runs on 127.0.0.1:3308
-// (mysqld_safe with socket /tmp/mysql_dg.sock), database datagrid_test:
-// app-equivalent table `users` (25k rows incl. bigint unsigned), view
-// `active_users`, and `notes` with a ~24k-char longtext row.
+// Integration test against MySQL or MariaDB, gated on DATAGRID_TEST_MYSQL=1.
+// The reproducible 25k-row fixture is defined in integration/mysql/init.sql.
 //
 // Run:
 //
-//	DATAGRID_TEST_MYSQL=1 MYSQL_PORT=3308 go test ./internal/drivers/mysql/
+//	make integration-up integration-test integration-down
 //
 // Honors MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASSWORD/MYSQL_DATABASE.
 
@@ -170,6 +167,11 @@ func TestExecuteStreaming(t *testing.T) {
 		"created_at": "time",
 		"metadata":   "json",
 		"avatar":     "bytes",
+	}
+	if s := sess.(*session); s.mariadb {
+		// MariaDB implements JSON as a validated LONGTEXT alias and reports
+		// that physical type through database/sql.
+		checks["metadata"] = "str"
 	}
 	for col, wantTag := range checks {
 		i, ok := colIdx[col]

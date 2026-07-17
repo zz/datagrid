@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16}
+    environment:
+      POSTGRES_DB: datagrid_test
+      POSTGRES_USER: datagrid
+      POSTGRES_PASSWORD: datagrid
+    ports:
+      - "15432:5432"
+    volumes:
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/10-datagrid.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datagrid -d datagrid_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mysql:
+    image: ${MYSQL_IMAGE:-mysql:8.4}
+    environment:
+      MYSQL_DATABASE: datagrid_test
+      MYSQL_ROOT_PASSWORD: datagrid
+    ports:
+      - "13306:3306"
+    volumes:
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/10-datagrid.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -pdatagrid --silent"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:7.4}
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

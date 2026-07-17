@@ -1,0 +1,106 @@
+name: Driver integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 8 * * 1"
+  pull_request:
+    paths:
+      - "internal/drivers/**"
+      - "integration/**"
+      - ".github/workflows/driver-integration.yml"
+
+concurrency:
+  group: driver-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["postgres:15", "postgres:16", "postgres:17"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Start PostgreSQL fixture
+        env:
+          POSTGRES_IMAGE: ${{ matrix.image }}
+        run: docker compose -f integration/compose.yml up -d --wait postgres
+      - name: Test PostgreSQL driver
+        env:
+          DATAGRID_TEST_PG: "1"
+          PGHOST: 127.0.0.1
+          PGPORT: "15432"
+          PGUSER: datagrid
+          PGPASSWORD: datagrid
+          PGDATABASE: datagrid_test
+        run: go test -count=1 ./internal/drivers/postgres
+      - name: Fixture logs
+        if: failure()
+        run: docker compose -f integration/compose.yml logs postgres
+      - if: always()
+        run: docker compose -f integration/compose.yml down -v
+
+  mysql:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["mysql:8.0", "mysql:8.4", "mariadb:10.11", "mariadb:11.4"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Start MySQL fixture
+        env:
+          MYSQL_IMAGE: ${{ matrix.image }}
+        run: docker compose -f integration/compose.yml up -d --wait mysql
+      - name: Test MySQL-compatible driver
+        env:
+          DATAGRID_TEST_MYSQL: "1"
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: "13306"
+          MYSQL_USER: root
+          MYSQL_PASSWORD: datagrid
+          MYSQL_DATABASE: datagrid_test
+        run: go test -count=1 ./internal/drivers/mysql
+      - name: Fixture logs
+        if: failure()
+        run: docker compose -f integration/compose.yml logs mysql
+      - if: always()
+        run: docker compose -f integration/compose.yml down -v
+
+  redis:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["redis:7.2", "redis:7.4", "valkey/valkey:8"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Start Redis-compatible fixture
+        env:
+          REDIS_IMAGE: ${{ matrix.image }}
+        run: docker compose -f integration/compose.yml up -d --wait redis
+      - name: Test Redis-compatible driver
+        env:
+          DATAGRID_TEST_REDIS: "1"
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: "16379"
+        run: go test -count=1 ./internal/drivers/redis
+      - name: Fixture logs
+        if: failure()
+        run: docker compose -f integration/compose.yml logs redis
+      - if: always()
+        run: docker compose -f integration/compose.yml down -v

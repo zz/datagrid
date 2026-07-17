@@ -19,7 +19,7 @@ VOLNAME  = DataGrid
 # Override on the command line: make build-signed IDENTITY="My Identity"
 IDENTITY ?= DataGrid Dev
 
-.PHONY: dev build build-signed sign dmg generate check fmt vet test tsc lint clean
+.PHONY: dev build build-signed sign dmg generate check fmt vet test tsc lint integration-up integration-test integration-down clean
 
 dev:
 	$(WAILS) dev
@@ -68,6 +68,17 @@ tsc:
 
 lint:
 	@echo "== eslint ==" && cd frontend && npx eslint src --ext .ts,.tsx
+
+integration-up:
+	docker compose -f integration/compose.yml up -d --wait
+
+integration-test:
+	DATAGRID_TEST_PG=1 PGHOST=127.0.0.1 PGPORT=15432 PGUSER=datagrid PGPASSWORD=datagrid PGDATABASE=datagrid_test go test ./internal/drivers/postgres
+	DATAGRID_TEST_MYSQL=1 MYSQL_HOST=127.0.0.1 MYSQL_PORT=13306 MYSQL_USER=root MYSQL_PASSWORD=datagrid MYSQL_DATABASE=datagrid_test go test ./internal/drivers/mysql
+	DATAGRID_TEST_REDIS=1 REDIS_HOST=127.0.0.1 REDIS_PORT=16379 go test ./internal/drivers/redis
+
+integration-down:
+	docker compose -f integration/compose.yml down -v
 
 clean:
 	rm -rf build/bin

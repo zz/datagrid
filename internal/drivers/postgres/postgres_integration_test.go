@@ -1,14 +1,11 @@
 package postgres
 
-// Integration test against a local Postgres, gated on DATAGRID_TEST_PG=1 so
-// CI stays hermetic. Setup (see docs/ and the pg-test-setup notes):
-//
-//	brew install postgresql@16 && brew services start postgresql@16
-//	createdb datagrid_test  (seeded with app.users 25k rows + public.notes)
+// Integration test against Postgres, gated on DATAGRID_TEST_PG=1. The
+// reproducible 25k-row fixture is defined in integration/postgres/init.sql.
 //
 // Run:
 //
-//	DATAGRID_TEST_PG=1 PGDATABASE=datagrid_test PGHOST=localhost go test ./internal/drivers/postgres/
+//	make integration-up integration-test integration-down
 //
 // Honors PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE.
 
