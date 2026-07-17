@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"strings"
@@ -44,6 +45,30 @@ func (s *session) Explain(ctx context.Context, statement string) (*drivers.PlanN
 		root.Children = append(root.Children, explainRowNode(fields))
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(root.Children) == 0 {
+		root.Label = "(empty plan)"
+	}
+	return root, nil
+}
+
+// Analyze executes the statement and consumes MySQL's iterator-plan text.
+func (s *session) Analyze(ctx context.Context, statement string) (*drivers.PlanNode, error) {
+	var raw string
+	if err := s.db.QueryRowContext(ctx, "EXPLAIN ANALYZE "+statement).Scan(&raw); err != nil {
+		return nil, err
+	}
+	root := &drivers.PlanNode{Label: "Actual query plan"}
+	scanner := bufio.NewScanner(strings.NewReader(raw))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		line = strings.TrimSpace(strings.TrimPrefix(line, "->"))
+		if line != "" {
+			root.Children = append(root.Children, drivers.PlanNode{Label: line})
+		}
+	}
+	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	if len(root.Children) == 0 {

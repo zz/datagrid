@@ -13,3 +13,9 @@ type PlanNode struct {
 type Explainer interface {
 	Explain(ctx context.Context, statement string) (*PlanNode, error)
 }
+
+// Analyzer executes a read-only statement and returns runtime plan metrics.
+// Callers must validate that the statement cannot mutate data before invoking it.
+type Analyzer interface {
+	Analyze(ctx context.Context, statement string) (*PlanNode, error)
+}

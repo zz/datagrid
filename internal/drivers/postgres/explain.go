@@ -11,8 +11,20 @@ import (
 
 // Explain runs EXPLAIN (FORMAT JSON) and normalizes the plan into a tree.
 func (s *session) Explain(ctx context.Context, statement string) (*drivers.PlanNode, error) {
+	return s.explain(ctx, statement, false)
+}
+
+func (s *session) Analyze(ctx context.Context, statement string) (*drivers.PlanNode, error) {
+	return s.explain(ctx, statement, true)
+}
+
+func (s *session) explain(ctx context.Context, statement string, analyze bool) (*drivers.PlanNode, error) {
 	var raw string
-	err := s.pool.QueryRow(ctx, "EXPLAIN (FORMAT JSON) "+statement).Scan(&raw)
+	prefix := "EXPLAIN (FORMAT JSON) "
+	if analyze {
+		prefix = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "
+	}
+	err := s.pool.QueryRow(ctx, prefix+statement).Scan(&raw)
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +68,21 @@ func pgPlanNode(m map[string]any) drivers.PlanNode {
 	}
 	if v, ok := m["Plan Width"]; ok {
 		details = append(details, fmt.Sprintf("width=%v", v))
+	}
+	if v, ok := m["Actual Total Time"]; ok {
+		details = append(details, fmt.Sprintf("actual time=%v ms", v))
+	}
+	if v, ok := m["Actual Rows"]; ok {
+		details = append(details, fmt.Sprintf("actual rows=%v", v))
+	}
+	if v, ok := m["Actual Loops"]; ok {
+		details = append(details, fmt.Sprintf("loops=%v", v))
+	}
+	if v, ok := m["Shared Hit Blocks"]; ok {
+		details = append(details, fmt.Sprintf("cache hits=%v", v))
+	}
+	if v, ok := m["Shared Read Blocks"]; ok {
+		details = append(details, fmt.Sprintf("disk reads=%v", v))
 	}
 	if cond := str(m, "Index Cond"); cond != "" {
 		details = append(details, "index: "+cond)

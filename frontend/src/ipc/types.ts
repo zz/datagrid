@@ -18,6 +18,7 @@ export interface RowBatch {
     columns?: Column[]
     rows: Value[][]
     seq: number
+    resultIndex?: number
 }
 
 export interface QuerySummary {
@@ -27,6 +28,9 @@ export interface QuerySummary {
     durationMs: number
     truncated: boolean
     error?: string
+    resultIndex?: number
+    statement?: string
+    final?: boolean
 }
 
 export function displayValue(v: Value): string {

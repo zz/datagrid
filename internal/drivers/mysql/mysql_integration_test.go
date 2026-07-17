@@ -94,12 +94,23 @@ func TestIntrospect(t *testing.T) {
 		t.Fatalf("expected datagrid_test schema, got %v", names(schemas.Nodes))
 	}
 
-	rels, err := sess.Introspect(ctx, drivers.IntrospectScope{Schema: "datagrid_test"})
+	groups, err := sess.Introspect(ctx, drivers.IntrospectScope{Schema: "datagrid_test"})
 	if err != nil {
-		t.Fatalf("relations: %v", err)
+		t.Fatalf("groups: %v", err)
+	}
+	if !slices.Contains(names(groups.Nodes), "Tables") || !slices.Contains(names(groups.Nodes), "Routines") {
+		t.Fatalf("expected grouped schema nodes, got %v", names(groups.Nodes))
+	}
+	tables, err := sess.Introspect(ctx, drivers.IntrospectScope{Schema: "datagrid_test", Category: "table"})
+	if err != nil {
+		t.Fatalf("tables: %v", err)
+	}
+	views, err := sess.Introspect(ctx, drivers.IntrospectScope{Schema: "datagrid_test", Category: "view"})
+	if err != nil {
+		t.Fatalf("views: %v", err)
 	}
 	kinds := map[string]string{}
-	for _, n := range rels.Nodes {
+	for _, n := range append(tables.Nodes, views.Nodes...) {
 		kinds[n.Name] = n.Kind
 	}
 	if kinds["users"] != "table" {
@@ -170,6 +181,25 @@ func TestExecuteStreaming(t *testing.T) {
 		if v.T != wantTag && v.T != "null" {
 			t.Errorf("column %q: want tag %q, got %q (v=%v)", col, wantTag, v.T, v.V)
 		}
+	}
+}
+
+func TestObjectDDL(t *testing.T) {
+	sess := testSession(t)
+	provider := sess.(drivers.ObjectDefiner)
+	ddl, err := provider.ObjectDDL(context.Background(), "table", "datagrid_test", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ddl, "CREATE TABLE") || !strings.Contains(ddl, "PRIMARY KEY") {
+		t.Fatalf("unexpected table DDL: %s", ddl)
+	}
+	view, err := provider.ObjectDDL(context.Background(), "view", "datagrid_test", "active_users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(view, "VIEW") {
+		t.Fatalf("unexpected view DDL: %s", view)
 	}
 }
 

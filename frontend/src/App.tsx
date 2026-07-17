@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Clock3, Command, Database, FileSearch, PanelLeft, Search, Settings } from 'lucide-react'
 import './App.css'
 import { GetAppInfo } from '../wailsjs/go/api/App'
 import { useApp } from './store'
@@ -16,28 +17,70 @@ import CopyButton from './components/CopyButton'
 import SettingsDialog from './features/settings/SettingsDialog'
 import ConnectionManager from './features/connections/ConnectionManager'
 import { applyTheme, useSettings } from './settings'
+import { useWorkspace } from './workspace'
+import ResizeHandle from './components/ResizeHandle'
+import CommandPalette from './features/navigation/CommandPalette'
+import { createWorkbenchCommands, displayShortcut, matchesShortcut } from './commands'
+import NameDialog from './components/NameDialog'
+import DatabaseSearchDialog from './features/search/DatabaseSearchDialog'
 
 function App() {
     const [version, setVersion] = useState('')
     const [paletteOpen, setPaletteOpen] = useState(false)
     const [settingsOpen, setSettingsOpen] = useState(false)
     const [managerOpen, setManagerOpen] = useState(false)
+    const [commandOpen, setCommandOpen] = useState(false)
+    const [databaseSearchOpen, setDatabaseSearchOpen] = useState(false)
+    const [renameTabId, setRenameTabId] = useState<string | null>(null)
     const [tabMenu, setTabMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
+    const { explorerOpen, explorerWidth, bottomPanelHeight, setExplorerOpen, setExplorerWidth, setBottomPanelHeight } =
+        useWorkspace()
     const {
+        connections,
+        connected,
         tabs,
         activeTabId,
         setActiveTab,
         closeTab,
         closeTabs,
+        renameTab,
         dialog,
         lastError,
         setError,
         loadConnections,
+        openDialog,
+        openQueryTab,
         applyBatch,
         applyDone,
         historyOpen,
         toggleHistory,
     } = useApp()
+
+    const activeConnectionId = tabs.find(tab => tab.id === activeTabId)?.connId ?? connections.find(c => connected[c.id])?.id
+    const commands = useMemo(
+        () =>
+            createWorkbenchCommands({
+                explorerOpen,
+                historyOpen,
+                canOpenConsole: !!activeConnectionId,
+                toggleExplorer: () => setExplorerOpen(!explorerOpen),
+                toggleHistory: () => toggleHistory(!historyOpen),
+                openConnections: () => setManagerOpen(true),
+                openNewConnection: () => openDialog(),
+                openConsole: () => activeConnectionId && openQueryTab(activeConnectionId),
+                openGoTo: () => setPaletteOpen(true),
+                openSettings: () => setSettingsOpen(true),
+            }),
+        [
+            activeConnectionId,
+            explorerOpen,
+            historyOpen,
+            openDialog,
+            openQueryTab,
+            setExplorerOpen,
+            toggleHistory,
+        ],
+    )
 
     useEffect(() => {
         applyTheme(useSettings.getState().theme)
@@ -45,21 +88,35 @@ function App() {
         loadConnections()
         const offBatch = onQueryBatch(applyBatch)
         const offDone = onQueryDone(applyDone)
-        // ⌘P / Ctrl+P opens the go-to-table palette (design: Navigation).
-        const onKey = (e: KeyboardEvent) => {
-            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
-                e.preventDefault()
-                setPaletteOpen(o => !o)
-            }
-        }
-        window.addEventListener('keydown', onKey)
         return () => {
             offBatch()
             offDone()
-            window.removeEventListener('keydown', onKey)
         }
+        // Event bridges and initial metadata loading are installed once.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
+
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
+                e.preventDefault()
+                setCommandOpen(open => !open)
+                return
+            }
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+                e.preventDefault()
+                setDatabaseSearchOpen(open => !open)
+                return
+            }
+            const command = commands.find(item => item.shortcut && matchesShortcut(e, item.shortcut))
+            if (command?.enabled) {
+                e.preventDefault()
+                command.run()
+            }
+        }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+    }, [commands])
 
     const activeTab = tabs.find(t => t.id === activeTabId)
 
@@ -67,9 +124,11 @@ function App() {
     // there are no such tabs to close.
     const tabMenuItems = (tabId: string): MenuItem[] => {
         const idx = tabs.findIndex(t => t.id === tabId)
+        const target = tabs[idx]
         const others = tabs.filter(t => t.id !== tabId).map(t => t.id)
         const toRight = tabs.slice(idx + 1).map(t => t.id)
         return [
+            ...(target?.kind === 'query' ? [{ label: 'Rename Console…', onClick: () => setRenameTabId(tabId) }] : []),
             { label: 'Close', onClick: () => closeTab(tabId) },
             { label: 'Close others', disabled: others.length === 0, onClick: () => closeTabs(others) },
             { label: 'Close to the right', disabled: toRight.length === 0, onClick: () => closeTabs(toRight) },
@@ -79,11 +138,23 @@ function App() {
 
     return (
         <div className="shell">
-            <aside className="sidebar" style={{ '--wails-draggable': 'drag' } as React.CSSProperties}>
-                <ErrorBoundary compact label="The connection list">
-                    <Sidebar />
-                </ErrorBoundary>
-            </aside>
+            {explorerOpen && (
+                <>
+                    <aside
+                        className="sidebar"
+                        style={{ '--wails-draggable': 'drag', width: explorerWidth } as React.CSSProperties}
+                    >
+                        <ErrorBoundary compact label="The connection list">
+                            <Sidebar />
+                        </ErrorBoundary>
+                    </aside>
+                    <ResizeHandle
+                        axis="horizontal"
+                        title="Resize Database Explorer"
+                        onResize={delta => setExplorerWidth(explorerWidth + delta)}
+                    />
+                </>
+            )}
             <div className="main">
                 <div className="tabstrip" style={{ '--wails-draggable': 'drag' } as React.CSSProperties}>
                     {tabs.length === 0 && <div className="tab active">Welcome</div>}
@@ -120,21 +191,36 @@ function App() {
                         </div>
                     ))}
                     <span className="tabstrip-spacer" />
-                    <button className="history-toggle" title="Connection manager" onClick={() => setManagerOpen(true)}>
-                        ⛁ Connections
+                    <button
+                        className={`workbench-action ${explorerOpen ? 'active' : ''}`}
+                        title={`Database Explorer (${displayShortcut('Mod+1')})`}
+                        aria-label="Database Explorer"
+                        onClick={() => setExplorerOpen(!explorerOpen)}
+                    >
+                        <PanelLeft size={15} />
                     </button>
-                    <button className="history-toggle" title="Settings" onClick={() => setSettingsOpen(true)}>
-                        ⚙
+                    <button className="workbench-action" title="Data Sources and Drivers" aria-label="Data Sources and Drivers" onClick={() => setManagerOpen(true)}>
+                        <Database size={15} />
                     </button>
-                    <button className="history-toggle" title="Go to table (⌘P)" onClick={() => setPaletteOpen(true)}>
-                        ⌕ Go to
+                    <button className="workbench-action" title={`Settings (${displayShortcut('Mod+,')})`} aria-label="Settings" onClick={() => setSettingsOpen(true)}>
+                        <Settings size={15} />
+                    </button>
+                    <button className="workbench-action" title={`Go to Table (${displayShortcut('Mod+P')})`} aria-label="Go to Table" onClick={() => setPaletteOpen(true)}>
+                        <Search size={15} />
+                    </button>
+                    <button className="workbench-action" title={`Search Database Objects (${displayShortcut('Mod+Shift+F')})`} aria-label="Search Database Objects" onClick={() => setDatabaseSearchOpen(true)}>
+                        <FileSearch size={15} />
+                    </button>
+                    <button className="workbench-action" title={`Find Action (${displayShortcut('Mod+Shift+P')})`} aria-label="Find Action" onClick={() => setCommandOpen(true)}>
+                        <Command size={15} />
                     </button>
                     <button
-                        className={`history-toggle ${historyOpen ? 'active' : ''}`}
-                        title="Query history"
+                        className={`workbench-action ${historyOpen ? 'active' : ''}`}
+                        title={`Query History (${displayShortcut('Mod+2')})`}
+                        aria-label="Query History"
                         onClick={() => toggleHistory(!historyOpen)}
                     >
-                        🕘 History
+                        <Clock3 size={15} />
                     </button>
                 </div>
                 <div className="content">
@@ -160,6 +246,18 @@ function App() {
                         </div>
                     )}
                 </div>
+                {historyOpen && (
+                    <>
+                        <ResizeHandle
+                            axis="vertical"
+                            title="Resize Query History"
+                            onResize={delta => setBottomPanelHeight(bottomPanelHeight - delta)}
+                        />
+                        <div className="bottom-tool-window" style={{ height: bottomPanelHeight }}>
+                            <HistoryPanel />
+                        </div>
+                    </>
+                )}
                 <div className="statusbar">
                     <span className={lastError ? 'status-error' : ''} title={lastError ?? ''}>
                         {lastError ? `⚠ ${lastError.slice(0, 140)}` : 'Ready'}
@@ -175,10 +273,22 @@ function App() {
                     <span className="statusbar-right">{version && `v${version}`}</span>
                 </div>
             </div>
-            {historyOpen && <HistoryPanel />}
             {paletteOpen && <GoToPalette onClose={() => setPaletteOpen(false)} />}
+            {commandOpen && <CommandPalette commands={commands} onClose={() => setCommandOpen(false)} />}
+            {databaseSearchOpen && <DatabaseSearchDialog initialConnId={activeConnectionId} onClose={() => setDatabaseSearchOpen(false)} />}
             {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
             {managerOpen && <ConnectionManager onClose={() => setManagerOpen(false)} />}
+            {renameTabId && (
+                <NameDialog
+                    title="Rename Console"
+                    value={tabs.find(tab => tab.id === renameTabId)?.title ?? ''}
+                    onCancel={() => setRenameTabId(null)}
+                    onSubmit={title => {
+                        renameTab(renameTabId, title)
+                        setRenameTabId(null)
+                    }}
+                />
+            )}
             {dialog.open && <ConnectionDialog key={dialog.editing?.id ?? 'new'} />}
             {tabMenu && (
                 <ContextMenu x={tabMenu.x} y={tabMenu.y} items={tabMenuItems(tabMenu.tabId)} onClose={() => setTabMenu(null)} />

@@ -31,6 +31,37 @@ func quoteDSN(v string) string {
 	return "'" + v + "'"
 }
 
+func quoteSearchPathItem(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+}
+
+func applySchemaContext(ctx context.Context, conn *pgxpool.Conn, schemas []string) (func(), error) {
+	if len(schemas) == 0 {
+		return func() {}, nil
+	}
+	var previous string
+	if err := conn.QueryRow(ctx, "SELECT current_setting('search_path')").Scan(&previous); err != nil {
+		return nil, err
+	}
+	items := make([]string, 0, len(schemas))
+	for _, schema := range schemas {
+		if strings.TrimSpace(schema) != "" {
+			items = append(items, quoteSearchPathItem(schema))
+		}
+	}
+	if len(items) == 0 {
+		return func() {}, nil
+	}
+	if _, err := conn.Exec(ctx, "SELECT set_config('search_path', $1, false)", strings.Join(items, ", ")); err != nil {
+		return nil, err
+	}
+	return func() {
+		restoreCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_, _ = conn.Exec(restoreCtx, "SELECT set_config('search_path', $1, false)", previous)
+	}, nil
+}
+
 func (d *pgDriver) Connect(ctx context.Context, cfg *drivers.ConnectionConfig, opts drivers.ConnectOptions) (drivers.Session, error) {
 	port := cfg.Port
 	if port == 0 {
@@ -70,6 +101,7 @@ func (d *pgDriver) Connect(ctx context.Context, cfg *drivers.ConnectionConfig, o
 	return &session{
 		pool:    pool,
 		running: map[drivers.QueryID]context.CancelFunc{},
+		txns:    map[string]*pgxpool.Conn{},
 		cells:   drivers.NewCellCache(128),
 	}, nil
 }
@@ -80,6 +112,8 @@ type session struct {
 
 	mu      sync.Mutex
 	running map[drivers.QueryID]context.CancelFunc
+	txMu    sync.Mutex
+	txns    map[string]*pgxpool.Conn
 }
 
 func (s *session) Ping(ctx context.Context) error {
@@ -92,8 +126,59 @@ func (s *session) Close() error {
 		cancel()
 	}
 	s.mu.Unlock()
+	s.txMu.Lock()
+	for id, conn := range s.txns {
+		_, _ = conn.Exec(context.Background(), "ROLLBACK")
+		conn.Release()
+		delete(s.txns, id)
+	}
+	s.txMu.Unlock()
 	s.pool.Close()
 	return nil
+}
+
+func (s *session) BeginTransaction(ctx context.Context, id string) error {
+	if id == "" {
+		return errors.New("transaction id is required")
+	}
+	s.txMu.Lock()
+	defer s.txMu.Unlock()
+	if _, exists := s.txns[id]; exists {
+		return fmt.Errorf("transaction %q is already active", id)
+	}
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Exec(ctx, "BEGIN"); err != nil {
+		conn.Release()
+		return err
+	}
+	s.txns[id] = conn
+	return nil
+}
+
+func (s *session) finishTransaction(ctx context.Context, id, statement string) error {
+	s.txMu.Lock()
+	conn, ok := s.txns[id]
+	if ok {
+		delete(s.txns, id)
+	}
+	s.txMu.Unlock()
+	if !ok {
+		return fmt.Errorf("no active transaction %q", id)
+	}
+	defer conn.Release()
+	_, err := conn.Exec(ctx, statement)
+	return err
+}
+
+func (s *session) CommitTransaction(ctx context.Context, id string) error {
+	return s.finishTransaction(ctx, id, "COMMIT")
+}
+
+func (s *session) RollbackTransaction(ctx context.Context, id string) error {
+	return s.finishTransaction(ctx, id, "ROLLBACK")
 }
 
 func (s *session) Cancel(_ context.Context, queryID drivers.QueryID) error {
@@ -159,10 +244,37 @@ func (s *session) Introspect(ctx context.Context, scope drivers.IntrospectScope)
 	switch {
 	case scope.Table != "":
 		return s.introspectColumns(ctx, scope.Schema, scope.Table)
+	case scope.Category != "":
+		return s.introspectCategory(ctx, scope.Schema, scope.Category)
 	case scope.Schema != "":
-		return s.introspectRelations(ctx, scope.Schema)
+		return s.introspectGroups(), nil
 	default:
 		return s.introspectSchemas(ctx)
+	}
+}
+
+func (s *session) introspectGroups() *drivers.SchemaTree {
+	return &drivers.SchemaTree{Nodes: []drivers.SchemaNode{
+		{Kind: "group", Name: "Tables", Scope: "table", HasChildren: true},
+		{Kind: "group", Name: "Views", Scope: "view", HasChildren: true},
+		{Kind: "group", Name: "Routines", Scope: "routine", HasChildren: true},
+		{Kind: "group", Name: "Sequences", Scope: "sequence", HasChildren: true},
+		{Kind: "group", Name: "Triggers", Scope: "trigger", HasChildren: true},
+	}}
+}
+
+func (s *session) introspectCategory(ctx context.Context, schema, category string) (*drivers.SchemaTree, error) {
+	switch category {
+	case "table", "view":
+		return s.introspectRelations(ctx, schema, category)
+	case "routine":
+		return s.introspectRoutines(ctx, schema)
+	case "sequence":
+		return s.introspectSequences(ctx, schema)
+	case "trigger":
+		return s.introspectTriggers(ctx, schema)
+	default:
+		return &drivers.SchemaTree{}, nil
 	}
 }
 
@@ -186,12 +298,16 @@ ORDER BY nspname`)
 	return tree, rows.Err()
 }
 
-func (s *session) introspectRelations(ctx context.Context, schema string) (*drivers.SchemaTree, error) {
+func (s *session) introspectRelations(ctx context.Context, schema, category string) (*drivers.SchemaTree, error) {
+	relkinds := "'r', 'p'"
+	if category == "view" {
+		relkinds = "'v', 'm'"
+	}
 	rows, err := s.pool.Query(ctx, `
 SELECT c.relname, c.relkind::text
 FROM pg_catalog.pg_class c
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm')
+WHERE n.nspname = $1 AND c.relkind IN (`+relkinds+`)
 ORDER BY c.relname`, schema)
 	if err != nil {
 		return nil, err
@@ -208,6 +324,63 @@ ORDER BY c.relname`, schema)
 			kind = "view"
 		}
 		tree.Nodes = append(tree.Nodes, drivers.SchemaNode{Kind: kind, Name: name, HasChildren: true})
+	}
+	return tree, rows.Err()
+}
+
+func (s *session) introspectRoutines(ctx context.Context, schema string) (*drivers.SchemaTree, error) {
+	rows, err := s.pool.Query(ctx, `SELECT p.proname, pg_catalog.pg_get_function_result(p.oid)
+FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = $1 ORDER BY p.proname`, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tree := &drivers.SchemaTree{}
+	for rows.Next() {
+		var name, result string
+		if err := rows.Scan(&name, &result); err != nil {
+			return nil, err
+		}
+		tree.Nodes = append(tree.Nodes, drivers.SchemaNode{Kind: "routine", Name: name, Detail: result})
+	}
+	return tree, rows.Err()
+}
+
+func (s *session) introspectSequences(ctx context.Context, schema string) (*drivers.SchemaTree, error) {
+	rows, err := s.pool.Query(ctx, `SELECT c.relname FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1 AND c.relkind = 'S' ORDER BY c.relname`, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tree := &drivers.SchemaTree{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		tree.Nodes = append(tree.Nodes, drivers.SchemaNode{Kind: "sequence", Name: name})
+	}
+	return tree, rows.Err()
+}
+
+func (s *session) introspectTriggers(ctx context.Context, schema string) (*drivers.SchemaTree, error) {
+	rows, err := s.pool.Query(ctx, `SELECT t.tgname, c.relname FROM pg_catalog.pg_trigger t
+JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1 AND NOT t.tgisinternal ORDER BY t.tgname`, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tree := &drivers.SchemaTree{}
+	for rows.Next() {
+		var name, table string
+		if err := rows.Scan(&name, &table); err != nil {
+			return nil, err
+		}
+		tree.Nodes = append(tree.Nodes, drivers.SchemaNode{Kind: "trigger", Name: name, Detail: table})
 	}
 	return tree, rows.Err()
 }
@@ -265,11 +438,27 @@ func (s *session) Execute(ctx context.Context, req drivers.QueryRequest, sink dr
 		return summary, nil
 	}
 
-	conn, err := s.pool.Acquire(qctx)
+	var conn *pgxpool.Conn
+	if req.TransactionID != "" {
+		s.txMu.Lock()
+		defer s.txMu.Unlock()
+		conn = s.txns[req.TransactionID]
+		if conn == nil {
+			return finish(fmt.Errorf("no active transaction %q", req.TransactionID))
+		}
+	} else {
+		var err error
+		conn, err = s.pool.Acquire(qctx)
+		if err != nil {
+			return finish(err)
+		}
+		defer conn.Release()
+	}
+	restoreContext, err := applySchemaContext(qctx, conn, req.SchemaContext)
 	if err != nil {
 		return finish(err)
 	}
-	defer conn.Release()
+	defer restoreContext()
 
 	rows, err := conn.Query(qctx, req.Statement, req.Args...)
 	if err != nil {

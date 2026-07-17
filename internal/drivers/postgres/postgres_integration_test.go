@@ -88,12 +88,23 @@ func TestIntrospect(t *testing.T) {
 		t.Fatalf("expected app and public schemas, got %v", names(schemas.Nodes))
 	}
 
-	rels, err := sess.Introspect(ctx, drivers.IntrospectScope{Schema: "app"})
+	groups, err := sess.Introspect(ctx, drivers.IntrospectScope{Schema: "app"})
 	if err != nil {
-		t.Fatalf("relations: %v", err)
+		t.Fatalf("groups: %v", err)
+	}
+	if !slices.Contains(names(groups.Nodes), "Tables") || !slices.Contains(names(groups.Nodes), "Routines") {
+		t.Fatalf("expected grouped schema nodes, got %v", names(groups.Nodes))
+	}
+	tables, err := sess.Introspect(ctx, drivers.IntrospectScope{Schema: "app", Category: "table"})
+	if err != nil {
+		t.Fatalf("tables: %v", err)
+	}
+	views, err := sess.Introspect(ctx, drivers.IntrospectScope{Schema: "app", Category: "view"})
+	if err != nil {
+		t.Fatalf("views: %v", err)
 	}
 	var kinds = map[string]string{}
-	for _, n := range rels.Nodes {
+	for _, n := range append(tables.Nodes, views.Nodes...) {
 		kinds[n.Name] = n.Kind
 	}
 	if kinds["users"] != "table" {
@@ -161,6 +172,25 @@ func TestExecuteStreaming(t *testing.T) {
 		if !tags[want] {
 			t.Errorf("expected a %q-tagged cell in app.users row, tags seen: %v", want, tags)
 		}
+	}
+}
+
+func TestObjectDDL(t *testing.T) {
+	sess := testSession(t)
+	provider := sess.(drivers.ObjectDefiner)
+	ddl, err := provider.ObjectDDL(context.Background(), "table", "app", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ddl, `CREATE TABLE "app"."users"`) || !strings.Contains(ddl, "PRIMARY KEY") {
+		t.Fatalf("unexpected table DDL: %s", ddl)
+	}
+	view, err := provider.ObjectDDL(context.Background(), "view", "app", "active_users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(view, `VIEW "app"."active_users"`) {
+		t.Fatalf("unexpected view DDL: %s", view)
 	}
 }
 

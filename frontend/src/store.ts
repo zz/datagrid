@@ -1,10 +1,13 @@
 import { create } from 'zustand'
 import {
     ApplyChangeset,
+    BeginTransaction,
     CancelQuery,
+    CommitTransaction,
     Connect,
     DeleteConnection,
     Disconnect,
+    FetchQueryPage,
     GetAutocomplete,
     ListConnections,
     ListHistory,
@@ -19,6 +22,7 @@ import {
     RedisScan,
     RedisSetString,
     RedisSetTTL,
+    RollbackTransaction,
     SaveConnection,
     SetReadOnly,
     SwitchDatabase,
@@ -28,6 +32,8 @@ import { drivers } from '../wailsjs/go/models'
 import { meta } from '../wailsjs/go/models'
 import type { Column, QuerySummary, RowBatch, Value } from './ipc/types'
 import { pageSize as settingsPageSize, rowLimit as settingsRowLimit } from './settings'
+import { loadConsoleSnapshot, saveConsoleSnapshot } from './consolePersistence'
+import { pushEditSnapshot, revertPendingChange, stepEditHistory, TableEditSnapshot } from './features/tabledata/tableEditHistory'
 
 // Fallback defaults; the effective values come from the settings store.
 export const PAGE_SIZE = 200
@@ -36,6 +42,19 @@ export const MAX_ROWS = 10_000
 export interface QueryState {
     queryId: string | null
     running: boolean
+    columns: Column[]
+    rows: Value[][]
+    summary: QuerySummary | null
+    transactionActive: boolean
+    transactionBusy: boolean
+    parameterValues: Record<string, string>
+    resultSets: QueryResult[]
+    activeResultIndex: number
+}
+
+export interface QueryResult {
+    index: number
+    statement: string
     columns: Column[]
     rows: Value[][]
     summary: QuerySummary | null
@@ -50,6 +69,7 @@ export interface Tab {
     // Table tabs only:
     schema?: string
     table?: string
+    objectKind?: 'table' | 'view'
 }
 
 export interface ReplLine {
@@ -102,6 +122,7 @@ export interface TableView {
     info: drivers.TableInfo | null
     columns: Column[]
     rows: Value[][]
+    baseRows: Value[][]
     sorts: drivers.SortSpec[]
     filters: drivers.FilterSpec[]
     whereRaw: string
@@ -111,14 +132,19 @@ export interface TableView {
     loading: boolean
     error: string | null
     edits: PendingEdit[]
+    undoStack: TableEditSnapshot[]
+    redoStack: TableEditSnapshot[]
     previews: string[]
+    conflicts: drivers.ChangeConflict[]
     colWidths: Record<string, number>
+    hiddenColumns: string[]
 }
 
 const emptyTableView = (): TableView => ({
     info: null,
     columns: [],
     rows: [],
+    baseRows: [],
     sorts: [],
     filters: [],
     whereRaw: '',
@@ -128,8 +154,12 @@ const emptyTableView = (): TableView => ({
     loading: false,
     error: null,
     edits: [],
+    undoStack: [],
+    redoStack: [],
     previews: [],
+    conflicts: [],
     colWidths: {},
+    hiddenColumns: [],
 })
 
 const emptyQuery = (): QueryState => ({
@@ -138,10 +168,32 @@ const emptyQuery = (): QueryState => ({
     columns: [],
     rows: [],
     summary: null,
+    transactionActive: false,
+    transactionBusy: false,
+    parameterValues: {},
+    resultSets: [],
+    activeResultIndex: 0,
 })
 
 let nextId = 1
 const genId = (prefix: string) => `${prefix}-${nextId++}-${Date.now().toString(36)}`
+
+const restoredConsoles = loadConsoleSnapshot()
+const restoredTabs: Tab[] = restoredConsoles.consoles.map(console => ({ ...console, kind: 'query' }))
+const restoredQueries = Object.fromEntries(restoredTabs.map(tab => [tab.id, emptyQuery()]))
+let persistTimer: ReturnType<typeof setTimeout> | undefined
+
+function persistConsoles(get: () => AppState) {
+    clearTimeout(persistTimer)
+    persistTimer = setTimeout(() => {
+        const state = get()
+        const consoles = state.tabs
+            .filter(tab => tab.kind === 'query')
+            .map(({ id, connId, title, sql }) => ({ id, connId, title, sql }))
+        const activeConsoleId = consoles.some(console => console.id === state.activeTabId) ? state.activeTabId : null
+        saveConsoleSnapshot({ consoles, activeConsoleId })
+    }, 150)
+}
 
 interface AppState {
     connections: drivers.ConnectionConfig[]
@@ -154,6 +206,7 @@ interface AppState {
     activeTabId: string | null
     queries: Record<string, QueryState> // by tab id
     queryToTab: Record<string, string>
+    queryAppends: Record<string, boolean>
     tableViews: Record<string, TableView> // by tab id
     redisViews: Record<string, RedisView> // by tab id
     history: meta.HistoryEntry[]
@@ -170,29 +223,47 @@ interface AppState {
     switchDatabase: (connId: string, database: string) => Promise<void>
     openDialog: (editing?: drivers.ConnectionConfig) => void
     closeDialog: () => void
-    openQueryTab: (connId: string) => void
-    openTableTab: (connId: string, schema: string, table: string) => Promise<void>
+    openQueryTab: (connId: string, sql?: string, title?: string) => void
+    openTableTab: (connId: string, schema: string, table: string, objectKind?: 'table' | 'view') => Promise<void>
+    openTableWithFilter: (connId: string, schema: string, table: string, column: string, value: string, op?: string) => Promise<void>
     openRedisTab: (connId: string, db: number) => Promise<void>
     closeTab: (tabId: string) => void
     closeTabs: (tabIds: string[]) => void
     setActiveTab: (tabId: string) => void
     setTabSql: (tabId: string, sql: string) => void
-    runQuery: (tabId: string, statement: string) => Promise<void>
+    renameTab: (tabId: string, title: string) => void
+    runQuery: (tabId: string, statement: string, parameters?: Record<string, string>, schemaContext?: string[], maxRows?: number, timeoutMs?: number) => Promise<void>
+    runQueryView: (tabId: string, statement: string, parameters?: Record<string, string>, schemaContext?: string[], maxRows?: number, timeoutMs?: number) => Promise<void>
+    fetchMoreQuery: (tabId: string, statement: string, resultIndex: number, offset: number, parameters?: Record<string, string>, schemaContext?: string[], pageSize?: number, timeoutMs?: number, replace?: boolean) => Promise<void>
     cancelQuery: (tabId: string) => Promise<void>
+    beginTransaction: (tabId: string) => Promise<void>
+    commitTransaction: (tabId: string) => Promise<void>
+    rollbackTransaction: (tabId: string) => Promise<void>
+    setActiveResult: (tabId: string, index: number) => void
+    replaceQueryResultRows: (tabId: string, index: number, rows: Value[][]) => void
     applyBatch: (batch: RowBatch) => void
     applyDone: (summary: QuerySummary) => void
     // Table view actions:
-    reloadTable: (tabId: string, recount?: boolean) => Promise<void>
+    reloadTable: (tabId: string, recount?: boolean, refreshInfo?: boolean) => Promise<void>
     setTableSort: (tabId: string, column: string) => Promise<void>
     setTableFilters: (tabId: string, filters: drivers.FilterSpec[]) => Promise<void>
     setTableWhere: (tabId: string, whereRaw: string) => Promise<void>
     setTablePage: (tabId: string, page: number) => Promise<void>
     setColWidth: (tabId: string, column: string, width: number) => void
+    setColumnVisible: (tabId: string, column: string, visible: boolean) => void
+    showAllColumns: (tabId: string) => void
     stageEdit: (tabId: string, rowIndex: number, column: string, text: string, isNull: boolean) => void
+    stageEditBatch: (tabId: string, changes: Array<{ rowIndex: number; column: string; text: string; isNull: boolean }>) => void
     stageInsert: (tabId: string) => void
+    stageDuplicate: (tabId: string, rowIndex: number) => void
     stageDelete: (tabId: string, rowIndex: number) => void
+    stageDeleteBatch: (tabId: string, rowIndexes: number[]) => void
+    undoTableEdit: (tabId: string) => void
+    redoTableEdit: (tabId: string) => void
+    revertTableEdit: (tabId: string, editIndex: number, column?: string) => void
     discardEdits: (tabId: string) => void
-    applyEdits: (tabId: string) => Promise<void>
+    applyEdits: (tabId: string, force?: boolean) => Promise<void>
+    dismissEditConflicts: (tabId: string) => void
     // Redis view actions:
     redisScan: (tabId: string, reset: boolean) => Promise<void>
     redisSetDb: (tabId: string, db: number) => Promise<void>
@@ -234,10 +305,11 @@ export const useApp = create<AppState>((set, get) => ({
     history: [],
     historyOpen: false,
     dialog: { open: false, editing: null },
-    tabs: [],
-    activeTabId: null,
-    queries: {},
+    tabs: restoredTabs,
+    activeTabId: restoredConsoles.activeConsoleId,
+    queries: restoredQueries,
     queryToTab: {},
+    queryAppends: {},
     lastError: null,
 
     loadConnections: async () => {
@@ -316,23 +388,25 @@ export const useApp = create<AppState>((set, get) => ({
     openDialog: (editing) => set({ dialog: { open: true, editing: editing ?? null } }),
     closeDialog: () => set({ dialog: { open: false, editing: null } }),
 
-    openQueryTab: (connId) => {
+    openQueryTab: (connId, sql = '', title) => {
         const conn = get().connections.find(c => c.id === connId)
+        const number = get().tabs.filter(tab => tab.kind === 'query' && tab.connId === connId).length + 1
         const tab: Tab = {
             id: genId('tab'),
             connId,
-            title: conn ? conn.name : 'Query',
+            title: title || `${conn?.name ?? 'Query'} console ${number}`,
             kind: 'query',
-            sql: '',
+            sql,
         }
         set(s => ({
             tabs: [...s.tabs, tab],
             activeTabId: tab.id,
             queries: { ...s.queries, [tab.id]: emptyQuery() },
         }))
+        persistConsoles(get)
     },
 
-    openTableTab: async (connId, schema, table) => {
+    openTableTab: async (connId, schema, table, objectKind = 'table') => {
         // Reuse an existing tab for the same table if one is open.
         const existing = get().tabs.find(
             t => t.kind === 'table' && t.connId === connId && t.schema === schema && t.table === table,
@@ -349,6 +423,7 @@ export const useApp = create<AppState>((set, get) => ({
             sql: '',
             schema,
             table,
+            objectKind,
         }
         set(s => ({
             tabs: [...s.tabs, tab],
@@ -356,6 +431,15 @@ export const useApp = create<AppState>((set, get) => ({
             tableViews: { ...s.tableViews, [tab.id]: emptyTableView() },
         }))
         await get().reloadTable(tab.id, true)
+    },
+
+    openTableWithFilter: async (connId, schema, table, column, value, op = '=') => {
+        await get().openTableTab(connId, schema, table)
+        const target = get().tabs.find(
+            tab => tab.kind === 'table' && tab.connId === connId && tab.schema === schema && tab.table === table,
+        )
+        if (!target) return
+        await get().setTableFilters(target.id, [drivers.FilterSpec.createFrom({ column, op, value })])
     },
 
     openRedisTab: async (connId, db) => {
@@ -391,6 +475,12 @@ export const useApp = create<AppState>((set, get) => ({
 
     closeTabs: (tabIds) => {
         const drop = new Set(tabIds)
+        for (const tab of get().tabs.filter(tab => drop.has(tab.id) && get().queries[tab.id]?.transactionActive)) {
+            const query = get().queries[tab.id]
+            const rollback = () => RollbackTransaction(tab.connId, tab.id).catch(() => {})
+            if (query.running && query.queryId) CancelQuery(tab.connId, query.queryId).finally(rollback)
+            else rollback()
+        }
         set(s => {
             const tabs = s.tabs.filter(t => !drop.has(t.id))
             const queries = { ...s.queries }
@@ -411,22 +501,52 @@ export const useApp = create<AppState>((set, get) => ({
                     : s.activeTabId
             return { tabs, queries, tableViews, redisViews, activeTabId }
         })
+        persistConsoles(get)
     },
 
-    setActiveTab: (tabId) => set({ activeTabId: tabId }),
-    setTabSql: (tabId, sql) =>
-        set(s => ({ tabs: s.tabs.map(t => (t.id === tabId ? { ...t, sql } : t)) })),
+    setActiveTab: (tabId) => {
+        set({ activeTabId: tabId })
+        persistConsoles(get)
+    },
+    setTabSql: (tabId, sql) => {
+        set(s => ({ tabs: s.tabs.map(t => (t.id === tabId ? { ...t, sql } : t)) }))
+        persistConsoles(get)
+    },
+    renameTab: (tabId, title) => {
+        const trimmed = title.trim()
+        if (!trimmed) return
+        set(s => ({ tabs: s.tabs.map(tab => (tab.id === tabId ? { ...tab, title: trimmed } : tab)) }))
+        persistConsoles(get)
+    },
 
-    runQuery: async (tabId, statement) => {
+    runQuery: async (tabId, statement, parameters = {}, schemaContext = [], maxRows = settingsRowLimit(), timeoutMs = 0) => {
         const tab = get().tabs.find(t => t.id === tabId)
         if (!tab || !statement.trim()) return
         const queryId = genId('q')
         set(s => ({
-            queries: { ...s.queries, [tabId]: { ...emptyQuery(), queryId, running: true } },
+            queries: {
+                ...s.queries,
+                [tabId]: {
+                    ...emptyQuery(),
+                    transactionActive: s.queries[tabId]?.transactionActive ?? false,
+                    parameterValues: { ...s.queries[tabId]?.parameterValues, ...parameters },
+                    queryId,
+                    running: true,
+                },
+            },
             queryToTab: { ...s.queryToTab, [queryId]: tabId },
         }))
         try {
-            await RunQuery(tab.connId, queryId, statement, settingsRowLimit())
+            await RunQuery(
+                tab.connId,
+                queryId,
+                statement,
+                maxRows,
+                get().queries[tabId]?.transactionActive ? tab.id : '',
+                parameters,
+                schemaContext,
+                timeoutMs,
+            )
         } catch (err) {
             set(s => ({
                 queries: {
@@ -448,11 +568,156 @@ export const useApp = create<AppState>((set, get) => ({
         }
     },
 
+    runQueryView: async (tabId, statement, parameters = {}, schemaContext = [], maxRows = settingsRowLimit(), timeoutMs = 0) => {
+        const tab = get().tabs.find(item => item.id === tabId)
+        const previous = get().queries[tabId]
+        if (!tab || !previous || previous.running || !statement.trim()) return
+        const source = previous.resultSets.find(result => result.index === previous.activeResultIndex) ?? {
+            index: 0, statement: '', columns: previous.columns, rows: previous.rows, summary: previous.summary,
+        }
+        const queryId = genId('view')
+        set(state => ({
+            queries: {
+                ...state.queries,
+                [tabId]: {
+                    ...previous,
+                    queryId,
+                    running: true,
+                    columns: source.columns,
+                    rows: [],
+                    summary: null,
+                    resultSets: [{ ...source, index: 0, rows: [], summary: null }],
+                    activeResultIndex: 0,
+                    parameterValues: { ...previous.parameterValues, ...parameters },
+                },
+            },
+            queryToTab: { ...state.queryToTab, [queryId]: tabId },
+        }))
+        try {
+            await RunQuery(
+                tab.connId,
+                queryId,
+                statement,
+                maxRows,
+                previous.transactionActive ? tab.id : '',
+                parameters,
+                schemaContext,
+                timeoutMs,
+            )
+        } catch (error) {
+            set(state => {
+                const current = state.queries[tabId]
+                if (!current || current.queryId !== queryId) return state
+                const failure: QuerySummary = { queryId, rowsAffected: 0, rowsReturned: 0, durationMs: 0, truncated: false, error: String(error), resultIndex: 0, statement, final: true }
+                return { queries: { ...state.queries, [tabId]: { ...current, running: false, summary: failure, resultSets: current.resultSets.map(result => ({ ...result, statement, summary: failure })) } } }
+            })
+        }
+    },
+
+    fetchMoreQuery: async (tabId, statement, resultIndex, offset, parameters = {}, schemaContext = [], pageSize = settingsRowLimit(), timeoutMs = 0, replace = false) => {
+        const tab = get().tabs.find(item => item.id === tabId)
+        const query = get().queries[tabId]
+        if (!tab || !query || query.running || !statement.trim()) return
+        const queryId = genId('fetch')
+        set(state => ({
+            queries: { ...state.queries, [tabId]: {
+                ...query,
+                queryId,
+                running: true,
+                rows: replace && resultIndex === 0 ? [] : query.rows,
+                resultSets: replace ? query.resultSets.map(result => result.index === resultIndex ? { ...result, rows: [], summary: null } : result) : query.resultSets,
+            } },
+            queryToTab: { ...state.queryToTab, [queryId]: tabId },
+            queryAppends: { ...state.queryAppends, [queryId]: true },
+        }))
+        try {
+            await FetchQueryPage(tab.connId, queryId, statement, offset, pageSize, resultIndex, query.transactionActive ? tab.id : '', parameters, schemaContext, timeoutMs)
+        } catch (error) {
+            set(state => {
+                const queryToTab = { ...state.queryToTab }
+                const queryAppends = { ...state.queryAppends }
+                delete queryToTab[queryId]
+                delete queryAppends[queryId]
+                const current = state.queries[tabId]
+                const failure: QuerySummary = { queryId, rowsAffected: 0, rowsReturned: offset, durationMs: 0, truncated: false, error: String(error), resultIndex, statement, final: true }
+                const resultSets = current.resultSets.map(result => result.index === resultIndex ? { ...result, summary: failure } : result)
+                return {
+                    queryToTab,
+                    queryAppends,
+                    queries: {
+                        ...state.queries,
+                        [tabId]: { ...current, running: false, queryId: null, summary: failure, resultSets },
+                    },
+                }
+            })
+        }
+    },
+
     cancelQuery: async (tabId) => {
         const tab = get().tabs.find(t => t.id === tabId)
         const q = get().queries[tabId]
         if (!tab || !q?.queryId || !q.running) return
         await CancelQuery(tab.connId, q.queryId).catch(() => {})
+    },
+
+    beginTransaction: async (tabId) => {
+        const tab = get().tabs.find(tab => tab.id === tabId)
+        const query = get().queries[tabId]
+        if (!tab || !query || query.running || query.transactionActive) return
+        set(s => ({ queries: { ...s.queries, [tabId]: { ...query, transactionBusy: true } } }))
+        try {
+            await BeginTransaction(tab.connId, tab.id)
+            set(s => ({ queries: { ...s.queries, [tabId]: { ...s.queries[tabId], transactionActive: true, transactionBusy: false } } }))
+        } catch (err) {
+            set(s => ({ queries: { ...s.queries, [tabId]: { ...s.queries[tabId], transactionBusy: false } }, lastError: String(err) }))
+        }
+    },
+
+    commitTransaction: async (tabId) => {
+        const tab = get().tabs.find(tab => tab.id === tabId)
+        const query = get().queries[tabId]
+        if (!tab || !query?.transactionActive || query.running) return
+        set(s => ({ queries: { ...s.queries, [tabId]: { ...query, transactionBusy: true } } }))
+        try {
+            await CommitTransaction(tab.connId, tab.id)
+            set(s => ({ queries: { ...s.queries, [tabId]: { ...s.queries[tabId], transactionActive: false, transactionBusy: false } } }))
+        } catch (err) {
+            set(s => ({ queries: { ...s.queries, [tabId]: { ...s.queries[tabId], transactionBusy: false } }, lastError: String(err) }))
+        }
+    },
+
+    rollbackTransaction: async (tabId) => {
+        const tab = get().tabs.find(tab => tab.id === tabId)
+        const query = get().queries[tabId]
+        if (!tab || !query?.transactionActive || query.running) return
+        set(s => ({ queries: { ...s.queries, [tabId]: { ...query, transactionBusy: true } } }))
+        try {
+            await RollbackTransaction(tab.connId, tab.id)
+            set(s => ({ queries: { ...s.queries, [tabId]: { ...s.queries[tabId], transactionActive: false, transactionBusy: false } } }))
+        } catch (err) {
+            set(s => ({ queries: { ...s.queries, [tabId]: { ...s.queries[tabId], transactionBusy: false } }, lastError: String(err) }))
+        }
+    },
+
+    setActiveResult: (tabId, index) => {
+        set(s => ({ queries: { ...s.queries, [tabId]: { ...s.queries[tabId], activeResultIndex: index } } }))
+    },
+
+    replaceQueryResultRows: (tabId, index, rows) => {
+        set(s => {
+            const query = s.queries[tabId]
+            if (!query) return {}
+            return {
+                queries: {
+                    ...s.queries,
+                    [tabId]: {
+                        ...query,
+                        rows: index === 0 ? rows : query.rows,
+                        resultSets: query.resultSets.map(result => result.index === index ? { ...result, rows } : result),
+                    },
+                },
+            }
+        })
     },
 
     applyBatch: (batch) => {
@@ -461,13 +726,29 @@ export const useApp = create<AppState>((set, get) => ({
         set(s => {
             const q = s.queries[tabId]
             if (!q || q.queryId !== batch.queryId) return s
+            const index = batch.resultIndex ?? 0
+            const existing = q.resultSets.find(result => result.index === index) ?? {
+                index,
+                statement: '',
+                columns: [],
+                rows: [],
+                summary: null,
+            }
+            const result = {
+                ...existing,
+                columns: batch.columns?.length ? batch.columns : existing.columns,
+                rows: batch.rows?.length ? [...existing.rows, ...batch.rows] : existing.rows,
+            }
+            const resultSets = [...q.resultSets.filter(item => item.index !== index), result].sort((a, b) => a.index - b.index)
             return {
                 queries: {
                     ...s.queries,
                     [tabId]: {
                         ...q,
                         columns: batch.columns?.length ? batch.columns : q.columns,
-                        rows: batch.rows?.length ? [...q.rows, ...batch.rows] : q.rows,
+                        rows: index === 0 && batch.rows?.length ? [...q.rows, ...batch.rows] : q.rows,
+                        resultSets,
+                        activeResultIndex: index,
                     },
                 },
             }
@@ -480,12 +761,38 @@ export const useApp = create<AppState>((set, get) => ({
         const connId = get().tabs.find(t => t.id === tabId)?.connId
         set(s => {
             const queryToTab = { ...s.queryToTab }
-            delete queryToTab[summary.queryId]
+            const queryAppends = { ...s.queryAppends }
+            const appending = !!queryAppends[summary.queryId]
+            if (summary.final !== false) delete queryToTab[summary.queryId]
+            if (summary.final !== false) delete queryAppends[summary.queryId]
             const q = s.queries[tabId]
-            if (!q || q.queryId !== summary.queryId) return { ...s, queryToTab }
+            if (!q || q.queryId !== summary.queryId) return { ...s, queryToTab, queryAppends }
+            const index = summary.resultIndex ?? 0
+            const existing = q.resultSets.find(result => result.index === index) ?? {
+                index,
+                statement: '',
+                columns: [],
+                rows: [],
+                summary: null,
+            }
+            const completedSummary = appending ? { ...summary, rowsReturned: existing.rows.length } : summary
+            const resultSets = [
+                ...q.resultSets.filter(result => result.index !== index),
+                { ...existing, statement: summary.statement ?? existing.statement, summary: completedSummary },
+            ].sort((a, b) => a.index - b.index)
             return {
                 queryToTab,
-                queries: { ...s.queries, [tabId]: { ...q, running: false, summary } },
+                queryAppends,
+                queries: {
+                    ...s.queries,
+                    [tabId]: {
+                        ...q,
+                        running: summary.final === false,
+                        summary: completedSummary,
+                        resultSets,
+                        activeResultIndex: index,
+                    },
+                },
             }
         })
         if (connId) {
@@ -494,7 +801,7 @@ export const useApp = create<AppState>((set, get) => ({
         }
     },
 
-    reloadTable: async (tabId, recount) => {
+    reloadTable: async (tabId, recount, refreshInfo) => {
         const tab = get().tabs.find(t => t.id === tabId)
         const view = get().tableViews[tabId]
         if (!tab || tab.kind !== 'table' || !view) return
@@ -510,20 +817,25 @@ export const useApp = create<AppState>((set, get) => ({
         })
         try {
             let info = view.info
-            if (!info) {
+            if (!info || refreshInfo) {
                 info = await OpenTable(tab.connId, tab.schema!, tab.table!)
             }
             const page = await LoadTableRows(tab.connId, req)
             get().markAlive(tab.connId)
+            const rows = (page.rows ?? []) as unknown as Value[][]
             setView(set, tabId, {
                 info,
                 columns: page.columns ?? [],
-                rows: (page.rows ?? []) as unknown as Value[][],
+                rows,
+                baseRows: rows,
                 hasMore: page.hasMore,
                 loading: false,
                 // Reloading from the server discards local edits.
                 edits: [],
+                undoStack: [],
+                redoStack: [],
                 previews: [],
+                conflicts: [],
             })
             // Recount when the filter set changed (not on every page turn).
             if (recount) {
@@ -547,6 +859,17 @@ export const useApp = create<AppState>((set, get) => ({
         if (!view) return
         setView(set, tabId, { colWidths: { ...view.colWidths, [column]: width } })
     },
+
+    setColumnVisible: (tabId, column, visible) => {
+        const view = get().tableViews[tabId]
+        if (!view) return
+        const hidden = new Set(view.hiddenColumns)
+        if (visible) hidden.delete(column)
+        else hidden.add(column)
+        setView(set, tabId, { hiddenColumns: [...hidden] })
+    },
+
+    showAllColumns: tabId => setView(set, tabId, { hiddenColumns: [] }),
 
     setTableSort: async (tabId, column) => {
         const view = get().tableViews[tabId]
@@ -576,20 +899,22 @@ export const useApp = create<AppState>((set, get) => ({
         await get().reloadTable(tabId)
     },
 
-    stageEdit: (tabId, rowIndex, column, text, isNull) => {
+    stageEdit: (tabId, rowIndex, column, text, isNull) => get().stageEditBatch(tabId, [{ rowIndex, column, text, isNull }]),
+
+    stageEditBatch: (tabId, changes) => {
         const view = get().tableViews[tabId]
-        if (!view) return
-        const rows = view.rows.map((r, i) =>
-            i === rowIndex
-                ? r.map((c, ci) =>
-                      view.columns[ci]?.name === column
-                          ? ({ t: isNull ? 'null' : 'str', v: isNull ? undefined : text } as Value)
-                          : c,
-                  )
-                : r,
-        )
-        const edits = mergeEdit(view, rowIndex, column, text, isNull)
-        setView(set, tabId, { rows, edits })
+        if (!view || !changes.length) return
+        let rows = view.rows
+        let edits = view.edits
+        for (const { rowIndex, column, text, isNull } of changes) {
+            if (edits.some(edit => edit.kind === 'delete' && edit.rowIndex === rowIndex)) continue
+            const columnIndex = view.columns.findIndex(item => item.name === column)
+            const currentCell = cellText(rows[rowIndex]?.[columnIndex])
+            if (currentCell.null === isNull && currentCell.text === text) continue
+            rows = rows.map((row, index) => index === rowIndex ? row.map((cell, columnIndex) => view.columns[columnIndex]?.name === column ? ({ t: isNull ? 'null' : 'str', v: isNull ? undefined : text } as Value) : cell) : row)
+            edits = mergeEdit({ ...view, rows, edits }, rowIndex, column, text, isNull)
+        }
+        commitTableEdit(set, tabId, view, rows, edits)
         refreshPreview(get, tabId)
     },
 
@@ -598,30 +923,67 @@ export const useApp = create<AppState>((set, get) => ({
         if (!view) return
         const blank: Value[] = view.columns.map(() => ({ t: 'null' }) as Value)
         const rowIndex = view.rows.length
-        setView(set, tabId, {
-            rows: [...view.rows, blank],
-            edits: [...view.edits, { kind: 'insert', key: {}, set: {}, rowIndex }],
-        })
+        commitTableEdit(set, tabId, view, [...view.rows, blank], [...view.edits, { kind: 'insert', key: {}, set: {}, rowIndex }])
         refreshPreview(get, tabId)
     },
 
-    stageDelete: (tabId, rowIndex) => {
+    stageDuplicate: (tabId, rowIndex) => {
         const view = get().tableViews[tabId]
-        if (!view || !view.info) return
-        // Removing a not-yet-inserted row just drops its insert edit.
-        const insertHere = view.edits.find(e => e.kind === 'insert' && e.rowIndex === rowIndex)
-        if (insertHere) {
-            setView(set, tabId, { edits: view.edits.filter(e => e !== insertHere) })
-            refreshPreview(get, tabId)
-            return
+        if (!view?.info || !view.rows[rowIndex]) return
+        const primaryKey = new Set(view.info.primaryKey ?? [])
+        const row = view.rows[rowIndex].map(cell => ({ ...cell }))
+        const setValues: PendingEdit['set'] = {}
+        view.columns.forEach((column, index) => {
+            if (primaryKey.has(column.name)) {
+                row[index] = { t: 'null' }
+                return
+            }
+            setValues[column.name] = cellText(row[index])
+        })
+        const duplicateIndex = view.rows.length
+        commitTableEdit(set, tabId, view, [...view.rows, row], [...view.edits, { kind: 'insert', key: {}, set: setValues, rowIndex: duplicateIndex }])
+        refreshPreview(get, tabId)
+    },
+
+    stageDelete: (tabId, rowIndex) => get().stageDeleteBatch(tabId, [rowIndex]),
+
+    stageDeleteBatch: (tabId, rowIndexes) => {
+        const view = get().tableViews[tabId]
+        if (!view?.info || !rowIndexes.length) return
+        let rows = view.rows
+        let edits = view.edits
+        for (const rowIndex of [...new Set(rowIndexes)].sort((left, right) => right - left)) {
+            const result = stageRowDelete({ ...view, rows, edits }, rowIndex)
+            rows = result.rows
+            edits = result.edits
         }
-        const key = pkOf(view, rowIndex)
-        if (!key) return
-        const edits = [
-            ...view.edits.filter(e => !(e.kind !== 'insert' && sameKey(e.key, key))),
-            { kind: 'delete' as const, key, set: {}, rowIndex },
-        ]
-        setView(set, tabId, { edits })
+        commitTableEdit(set, tabId, view, rows, edits)
+        refreshPreview(get, tabId)
+    },
+
+    undoTableEdit: tabId => {
+        const view = get().tableViews[tabId]
+        if (!view) return
+        const result = stepEditHistory(view.rows, view.edits, view.undoStack, view.redoStack)
+        if (!result) return
+        setView(set, tabId, { rows: result.rows, edits: result.edits, undoStack: result.from, redoStack: result.to, conflicts: [] })
+        refreshPreview(get, tabId)
+    },
+
+    redoTableEdit: tabId => {
+        const view = get().tableViews[tabId]
+        if (!view) return
+        const result = stepEditHistory(view.rows, view.edits, view.redoStack, view.undoStack)
+        if (!result) return
+        setView(set, tabId, { rows: result.rows, edits: result.edits, redoStack: result.from, undoStack: result.to, conflicts: [] })
+        refreshPreview(get, tabId)
+    },
+
+    revertTableEdit: (tabId, editIndex, column) => {
+        const view = get().tableViews[tabId]
+        if (!view) return
+        const result = revertPendingChange(view.rows, view.baseRows, view.columns.map(item => item.name), view.edits, editIndex, column)
+        commitTableEdit(set, tabId, view, result.rows, result.edits)
         refreshPreview(get, tabId)
     },
 
@@ -629,17 +991,23 @@ export const useApp = create<AppState>((set, get) => ({
         await get().reloadTable(tabId)
     },
 
-    applyEdits: async (tabId) => {
+    applyEdits: async (tabId, force = false) => {
         const tab = get().tabs.find(t => t.id === tabId)
         const view = get().tableViews[tabId]
         if (!tab || !view || view.edits.length === 0) return
         try {
-            await ApplyChangeset(tab.connId, changesetOf(tab, view))
+            const result = await ApplyChangeset(tab.connId, changesetOf(tab, view, force))
+            if (result.conflicts?.length) {
+                setView(set, tabId, { conflicts: result.conflicts, error: null })
+                return
+            }
             await get().reloadTable(tabId)
         } catch (err) {
             setView(set, tabId, { error: String(err) })
         }
     },
+
+    dismissEditConflicts: tabId => setView(set, tabId, { conflicts: [] }),
 
     redisScan: async (tabId, reset) => {
         const tab = get().tabs.find(t => t.id === tabId)
@@ -811,7 +1179,7 @@ function pkOf(view: TableView, rowIndex: number): Record<string, string> | null 
     for (const col of view.info.primaryKey) {
         const ci = view.columns.findIndex(c => c.name === col)
         if (ci < 0) return null
-        key[col] = cellText(view.rows[rowIndex]?.[ci]).text
+        key[col] = cellText(view.baseRows[rowIndex]?.[ci] ?? view.rows[rowIndex]?.[ci]).text
     }
     return key
 }
@@ -820,6 +1188,42 @@ function sameKey(a: Record<string, string>, b: Record<string, string>): boolean 
     const ak = Object.keys(a)
     if (ak.length !== Object.keys(b).length) return false
     return ak.every(k => a[k] === b[k])
+}
+
+function commitTableEdit(
+    set: (fn: (state: AppState) => Partial<AppState>) => void,
+    tabId: string,
+    view: TableView,
+    rows: Value[][],
+    edits: PendingEdit[],
+) {
+    if (rows === view.rows && edits === view.edits) return
+    setView(set, tabId, {
+        rows,
+        edits,
+        undoStack: pushEditSnapshot(view.undoStack, view.rows, view.edits),
+        redoStack: [],
+        conflicts: [],
+    })
+}
+
+function stageRowDelete(view: TableView, rowIndex: number): Pick<TableView, 'rows' | 'edits'> {
+    const insertHere = view.edits.find(edit => edit.kind === 'insert' && edit.rowIndex === rowIndex)
+    if (insertHere) {
+        const rows = view.rows.filter((_, index) => index !== rowIndex)
+        const edits = view.edits.filter(edit => edit !== insertHere).map(edit => edit.rowIndex > rowIndex ? { ...edit, rowIndex: edit.rowIndex - 1 } : edit)
+        return { rows, edits }
+    }
+    const key = pkOf(view, rowIndex)
+    if (!key || view.edits.some(edit => edit.kind === 'delete' && sameKey(edit.key, key))) return { rows: view.rows, edits: view.edits }
+    const previousUpdate = view.edits.find(edit => edit.kind === 'update' && sameKey(edit.key, key))
+    return {
+        rows: view.rows,
+        edits: [
+            ...view.edits.filter(edit => !(edit.kind !== 'insert' && sameKey(edit.key, key))),
+            { kind: 'delete', key, set: previousUpdate?.set ?? {}, rowIndex },
+        ],
+    }
 }
 
 // mergeEdit folds a cell change into the pending-edit list: it updates an
@@ -834,30 +1238,53 @@ function mergeEdit(
     const cell = { null: isNull, text }
     const insertHere = view.edits.find(e => e.kind === 'insert' && e.rowIndex === rowIndex)
     if (insertHere) {
+        const set = { ...insertHere.set }
+        if (cell.null) delete set[column]
+        else set[column] = cell
         return view.edits.map(e =>
-            e === insertHere ? { ...e, set: { ...e.set, [column]: cell } } : e,
+            e === insertHere ? { ...e, set } : e,
         )
     }
     const key = pkOf(view, rowIndex)
     if (!key) return view.edits // no PK: not editable
     const existing = view.edits.find(e => e.kind === 'update' && sameKey(e.key, key))
+    const columnIndex = view.columns.findIndex(item => item.name === column)
+    const original = cellText(view.baseRows[rowIndex]?.[columnIndex])
+    const matchesOriginal = original.null === cell.null && original.text === cell.text
     if (existing) {
-        return view.edits.map(e =>
-            e === existing ? { ...e, set: { ...e.set, [column]: cell } } : e,
-        )
+        const nextSet = { ...existing.set }
+        if (matchesOriginal) delete nextSet[column]
+        else nextSet[column] = cell
+        return Object.keys(nextSet).length ? view.edits.map(e => e === existing ? { ...e, set: nextSet } : e) : view.edits.filter(e => e !== existing)
     }
+    if (matchesOriginal) return view.edits
     return [...view.edits, { kind: 'update', key, set: { [column]: cell }, rowIndex }]
 }
 
-function changesetOf(tab: Tab, view: TableView): drivers.ChangesetRequest {
+function changesetOf(tab: Tab, view: TableView, force = false): drivers.ChangesetRequest {
     const changes = view.edits.map(e =>
         drivers.RowChange.createFrom({
             kind: e.kind,
             key: Object.fromEntries(Object.entries(e.key).map(([k, v]) => [k, { null: false, text: v }])),
             set: e.set,
+            original: originalValuesOf(view, e),
         }),
     )
-    return drivers.ChangesetRequest.createFrom({ schema: tab.schema, table: tab.table, changes })
+    return drivers.ChangesetRequest.createFrom({ schema: tab.schema, table: tab.table, changes, force })
+}
+
+const unsafeOriginalType = /json|blob|binary|bytea|geometry|geography|xml|image/i
+
+function originalValuesOf(view: TableView, edit: PendingEdit): Record<string, { null: boolean; text: string }> {
+    if (edit.kind === 'insert' || edit.rowIndex < 0) return {}
+    const row = view.baseRows[edit.rowIndex]
+    if (!row) return {}
+    return Object.fromEntries(view.columns.flatMap((column, index) => {
+        const cell = row[index]
+        if (!cell) return []
+        if (cell.t !== 'null' && (cell.ref || unsafeOriginalType.test(column.typeName))) return []
+        return [[column.name, cellText(cell)]]
+    }))
 }
 
 function refreshPreview(get: () => AppState, tabId: string) {
@@ -870,11 +1297,12 @@ function refreshPreview(get: () => AppState, tabId: string) {
         }))
         return
     }
+    const requestedEdits = view.edits
     PreviewChangeset(tab.connId, changesetOf(tab, view))
         .then(previews =>
             useApp.setState(s => {
                 const v = s.tableViews[tabId]
-                if (!v) return {}
+                if (!v || v.edits !== requestedEdits) return {}
                 return { tableViews: { ...s.tableViews, [tabId]: { ...v, previews: previews ?? [] } } }
             }),
         )

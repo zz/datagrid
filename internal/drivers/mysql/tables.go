@@ -14,7 +14,8 @@ var dialect = drivers.Dialect{
 	Quote: func(s string) string {
 		return "`" + strings.ReplaceAll(s, "`", "``") + "`"
 	},
-	Param: func(int) string { return "?" },
+	Param:         func(int) string { return "?" },
+	DefaultValues: "() VALUES ()",
 }
 
 func (s *session) TableInfo(ctx context.Context, schema, table string) (*drivers.TableInfo, error) {
@@ -47,7 +48,94 @@ ORDER BY ordinal_position`, schema, table)
 		return nil, err
 	}
 	info.PrimaryKey = pk
+	if err := s.loadTableDetails(ctx, info); err != nil {
+		return nil, err
+	}
 	return info, nil
+}
+
+func (s *session) loadTableDetails(ctx context.Context, info *drivers.TableInfo) error {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT tc.constraint_name, tc.constraint_type, COALESCE(kcu.column_name, ''),
+       COALESCE(kcu.ordinal_position, 0)
+FROM information_schema.table_constraints tc
+LEFT JOIN information_schema.key_column_usage kcu
+  ON kcu.constraint_schema = tc.constraint_schema
+ AND kcu.table_name = tc.table_name
+ AND kcu.constraint_name = tc.constraint_name
+WHERE tc.table_schema = ? AND tc.table_name = ?
+ORDER BY tc.constraint_name, kcu.ordinal_position`, info.Schema, info.Table)
+	if err != nil {
+		return err
+	}
+	byName := make(map[string]int)
+	for rows.Next() {
+		var name, kind, column string
+		var ordinal int
+		if err := rows.Scan(&name, &kind, &column, &ordinal); err != nil {
+			rows.Close()
+			return err
+		}
+		idx, ok := byName[name]
+		if !ok {
+			mapped := strings.ToLower(strings.ReplaceAll(kind, " ", "_"))
+			info.Constraints = append(info.Constraints, drivers.ConstraintInfo{Name: name, Kind: mapped, Definition: kind})
+			idx = len(info.Constraints) - 1
+			byName[name] = idx
+		}
+		if column != "" {
+			info.Constraints[idx].Columns = append(info.Constraints[idx].Columns, column)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	fkRows, err := s.db.QueryContext(ctx, `
+SELECT kcu.constraint_name, kcu.column_name, kcu.referenced_table_schema,
+       kcu.referenced_table_name, kcu.referenced_column_name,
+       rc.update_rule, rc.delete_rule
+FROM information_schema.key_column_usage kcu
+JOIN information_schema.referential_constraints rc
+  ON rc.constraint_schema = kcu.constraint_schema
+ AND rc.table_name = kcu.table_name
+ AND rc.constraint_name = kcu.constraint_name
+WHERE kcu.table_schema = ? AND kcu.table_name = ?
+  AND kcu.referenced_table_name IS NOT NULL
+ORDER BY kcu.constraint_name, kcu.ordinal_position`, info.Schema, info.Table)
+	if err != nil {
+		return err
+	}
+	defer fkRows.Close()
+	fkByName := make(map[string]int)
+	for fkRows.Next() {
+		var name, column, refSchema, refTable, refColumn, onUpdate, onDelete string
+		if err := fkRows.Scan(&name, &column, &refSchema, &refTable, &refColumn, &onUpdate, &onDelete); err != nil {
+			return err
+		}
+		idx, ok := fkByName[name]
+		if !ok {
+			info.ForeignKeys = append(info.ForeignKeys, drivers.ForeignKeyInfo{
+				Name: name, ReferencedSchema: refSchema, ReferencedTable: refTable, OnUpdate: onUpdate, OnDelete: onDelete,
+			})
+			idx = len(info.ForeignKeys) - 1
+			fkByName[name] = idx
+		}
+		info.ForeignKeys[idx].Columns = append(info.ForeignKeys[idx].Columns, column)
+		info.ForeignKeys[idx].ReferencedColumns = append(info.ForeignKeys[idx].ReferencedColumns, refColumn)
+	}
+	if err := fkRows.Err(); err != nil {
+		return err
+	}
+	indexes, err := s.ListIndexes(ctx, info.Schema, info.Table)
+	if err != nil {
+		return err
+	}
+	info.Indexes = indexes
+	return nil
 }
 
 // keyColumns returns the PRIMARY KEY columns in order, or the columns of the
@@ -194,16 +282,30 @@ func (s *session) ApplyChanges(ctx context.Context, req drivers.ChangesetRequest
 		}
 	}()
 
-	result := &drivers.ChangesetResult{}
+	result := &drivers.ChangesetResult{Previews: make([]string, len(stmts))}
+	for i, st := range stmts {
+		result.Previews[i] = st.Preview
+	}
 	for _, st := range stmts {
 		res, err := tx.ExecContext(ctx, st.SQL, st.Args...)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", st.Preview, err)
 		}
-		if n, err := res.RowsAffected(); err == nil {
-			result.RowsAffected += n
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return nil, err
 		}
-		result.Previews = append(result.Previews, st.Preview)
+		if (st.Kind == "update" || st.Kind == "delete") && affected != 1 {
+			result.RowsAffected = 0
+			result.Conflicts = []drivers.ChangeConflict{{
+				ChangeIndex: st.ChangeIndex,
+				Kind:        st.Kind,
+				Key:         st.Key,
+				Reason:      "the row was changed or removed after it was loaded",
+			}}
+			return result, nil
+		}
+		result.RowsAffected += affected
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err

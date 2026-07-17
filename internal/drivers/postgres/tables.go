@@ -15,7 +15,8 @@ var dialect = drivers.Dialect{
 	Quote: func(s string) string {
 		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 	},
-	Param: func(n int) string { return fmt.Sprintf("$%d", n) },
+	Param:         func(n int) string { return fmt.Sprintf("$%d", n) },
+	DefaultValues: "DEFAULT VALUES",
 }
 
 // typeMap renders column type names in ReadPage; a shared instance is fine.
@@ -61,7 +62,78 @@ ORDER BY a.attnum`, schema, table)
 		}
 	}
 	info.PrimaryKey = pk
+	if err := s.loadTableDetails(ctx, info); err != nil {
+		return nil, err
+	}
 	return info, nil
+}
+
+func (s *session) loadTableDetails(ctx context.Context, info *drivers.TableInfo) error {
+	rows, err := s.pool.Query(ctx, `
+SELECT con.conname,
+       CASE con.contype WHEN 'p' THEN 'primary_key' WHEN 'u' THEN 'unique'
+            WHEN 'f' THEN 'foreign_key' WHEN 'c' THEN 'check' ELSE con.contype::text END,
+       pg_catalog.pg_get_constraintdef(con.oid),
+       ARRAY(SELECT a.attname FROM unnest(con.conkey) WITH ORDINALITY k(attnum, ord)
+             JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+             ORDER BY k.ord)
+FROM pg_catalog.pg_constraint con
+JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1 AND c.relname = $2
+ORDER BY con.conname`, info.Schema, info.Table)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var constraint drivers.ConstraintInfo
+		if err := rows.Scan(&constraint.Name, &constraint.Kind, &constraint.Definition, &constraint.Columns); err != nil {
+			rows.Close()
+			return err
+		}
+		info.Constraints = append(info.Constraints, constraint)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	fkRows, err := s.pool.Query(ctx, `
+SELECT con.conname,
+       ARRAY(SELECT a.attname FROM unnest(con.conkey) WITH ORDINALITY k(attnum, ord)
+             JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum ORDER BY k.ord),
+       rn.nspname, rc.relname,
+       ARRAY(SELECT a.attname FROM unnest(con.confkey) WITH ORDINALITY k(attnum, ord)
+             JOIN pg_catalog.pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum ORDER BY k.ord),
+       CASE con.confupdtype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END,
+       CASE con.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END
+FROM pg_catalog.pg_constraint con
+JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_catalog.pg_class rc ON rc.oid = con.confrelid
+JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
+WHERE n.nspname = $1 AND c.relname = $2 AND con.contype = 'f'
+ORDER BY con.conname`, info.Schema, info.Table)
+	if err != nil {
+		return err
+	}
+	defer fkRows.Close()
+	for fkRows.Next() {
+		var fk drivers.ForeignKeyInfo
+		if err := fkRows.Scan(&fk.Name, &fk.Columns, &fk.ReferencedSchema, &fk.ReferencedTable, &fk.ReferencedColumns, &fk.OnUpdate, &fk.OnDelete); err != nil {
+			return err
+		}
+		info.ForeignKeys = append(info.ForeignKeys, fk)
+	}
+	if err := fkRows.Err(); err != nil {
+		return err
+	}
+	indexes, err := s.ListIndexes(ctx, info.Schema, info.Table)
+	if err != nil {
+		return err
+	}
+	info.Indexes = indexes
+	return nil
 }
 
 func (s *session) keyColumns(ctx context.Context, schema, table, contype string) ([]string, error) {
@@ -182,14 +254,27 @@ func (s *session) ApplyChanges(ctx context.Context, req drivers.ChangesetRequest
 	}
 	defer tx.Rollback(ctx) // no-op after commit
 
-	result := &drivers.ChangesetResult{}
+	result := &drivers.ChangesetResult{Previews: make([]string, len(stmts))}
+	for i, st := range stmts {
+		result.Previews[i] = st.Preview
+	}
 	for _, st := range stmts {
 		tag, err := tx.Exec(ctx, st.SQL, st.Args...)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", st.Preview, err)
 		}
-		result.RowsAffected += tag.RowsAffected()
-		result.Previews = append(result.Previews, st.Preview)
+		affected := tag.RowsAffected()
+		if (st.Kind == "update" || st.Kind == "delete") && affected != 1 {
+			result.RowsAffected = 0
+			result.Conflicts = []drivers.ChangeConflict{{
+				ChangeIndex: st.ChangeIndex,
+				Kind:        st.Kind,
+				Key:         st.Key,
+				Reason:      "the row was changed or removed after it was loaded",
+			}}
+			return result, nil
+		}
+		result.RowsAffected += affected
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err

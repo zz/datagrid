@@ -22,6 +22,12 @@ func TestTableInfoPK(t *testing.T) {
 	if len(info.Columns) < 5 {
 		t.Errorf("want several columns, got %d", len(info.Columns))
 	}
+	if !slices.ContainsFunc(info.Constraints, func(c drivers.ConstraintInfo) bool { return c.Kind == "primary_key" }) {
+		t.Errorf("expected primary-key constraint, got %#v", info.Constraints)
+	}
+	if len(info.Indexes) == 0 {
+		t.Error("expected table indexes")
+	}
 }
 
 func TestReadPageSortFilterPaging(t *testing.T) {
@@ -90,6 +96,21 @@ func TestApplyChangesRoundTrip(t *testing.T) {
 	id := page.Rows[0][0].(drivers.Value) // id is first column
 	idText := itoa64(id.V.(int64))
 
+	stale, err := te.ApplyChanges(ctx, drivers.ChangesetRequest{
+		Schema: "datagrid_test", Table: "users",
+		Changes: []drivers.RowChange{{Kind: "update",
+			Set:      map[string]drivers.CellInput{"score": {Text: "8.88"}},
+			Key:      map[string]drivers.CellInput{"id": {Text: idText}},
+			Original: map[string]drivers.CellInput{"score": {Text: "999"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("stale update: %v", err)
+	}
+	if stale.RowsAffected != 0 || len(stale.Conflicts) != 1 {
+		t.Fatalf("stale update result = %+v", stale)
+	}
+
 	upd, err := te.ApplyChanges(ctx, drivers.ChangesetRequest{
 		Schema: "datagrid_test", Table: "users",
 		Changes: []drivers.RowChange{{Kind: "update",
@@ -152,4 +173,37 @@ func TestExplain(t *testing.T) {
 		t.Fatalf("expected at least one plan step, got %+v", plan)
 	}
 	t.Logf("plan step: %s %s", plan.Children[0].Label, plan.Children[0].Detail)
+}
+
+func TestManualTransactionRollback(t *testing.T) {
+	sess := testSession(t)
+	tx := sess.(drivers.TransactionController)
+	te := sess.(drivers.TableEditor)
+	ctx := context.Background()
+	const id = "test-console-rollback"
+	const email = "manual-tx-rollback@example.com"
+
+	if err := tx.BeginTransaction(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := sess.Execute(ctx, drivers.QueryRequest{
+		QueryID: "tx-insert", TransactionID: id,
+		Statement: "INSERT INTO users (email, active, score) VALUES ('" + email + "', 1, 1)",
+	}, func(drivers.RowBatch) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Error != "" {
+		t.Fatal(summary.Error)
+	}
+	if err := tx.RollbackTransaction(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	page, err := te.ReadPage(ctx, drivers.PageRequest{Schema: "datagrid_test", Table: "users", Filters: []drivers.FilterSpec{{Column: "email", Op: "=", Value: email}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Rows) != 0 {
+		t.Fatalf("rolled-back row is visible")
+	}
 }

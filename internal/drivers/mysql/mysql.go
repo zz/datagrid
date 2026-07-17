@@ -25,6 +25,31 @@ func init() {
 
 type myDriver struct{}
 
+func quoteDatabase(value string) string {
+	return "`" + strings.ReplaceAll(value, "`", "``") + "`"
+}
+
+func applySchemaContext(ctx context.Context, conn *sql.Conn, schemas []string) (func(), error) {
+	if len(schemas) == 0 || strings.TrimSpace(schemas[0]) == "" {
+		return func() {}, nil
+	}
+	var previous sql.NullString
+	if err := conn.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&previous); err != nil {
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, "USE "+quoteDatabase(schemas[0])); err != nil {
+		return nil, err
+	}
+	return func() {
+		if !previous.Valid || previous.String == "" {
+			return
+		}
+		restoreCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_, _ = conn.ExecContext(restoreCtx, "USE "+quoteDatabase(previous.String))
+	}, nil
+}
+
 func (d *myDriver) Capabilities() drivers.Capabilities {
 	return drivers.Capabilities{SQL: true, MultipleDatabases: true}
 }
@@ -88,6 +113,7 @@ func (d *myDriver) Connect(ctx context.Context, cfg *drivers.ConnectionConfig, o
 		db:       db,
 		database: cfg.Database,
 		running:  map[drivers.QueryID]*runningQuery{},
+		txns:     map[string]*sql.Conn{},
 		cells:    drivers.NewCellCache(128),
 	}
 	// Vendor/version probe: MariaDB reports e.g. "11.4.2-MariaDB".
@@ -113,6 +139,8 @@ type session struct {
 
 	mu      sync.Mutex
 	running map[drivers.QueryID]*runningQuery
+	txMu    sync.Mutex
+	txns    map[string]*sql.Conn
 }
 
 func (s *session) Ping(ctx context.Context) error {
@@ -125,7 +153,58 @@ func (s *session) Close() error {
 		rq.cancel()
 	}
 	s.mu.Unlock()
+	s.txMu.Lock()
+	for id, conn := range s.txns {
+		_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		_ = conn.Close()
+		delete(s.txns, id)
+	}
+	s.txMu.Unlock()
 	return s.db.Close()
+}
+
+func (s *session) BeginTransaction(ctx context.Context, id string) error {
+	if id == "" {
+		return errors.New("transaction id is required")
+	}
+	s.txMu.Lock()
+	defer s.txMu.Unlock()
+	if _, exists := s.txns[id]; exists {
+		return fmt.Errorf("transaction %q is already active", id)
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "START TRANSACTION"); err != nil {
+		conn.Close()
+		return err
+	}
+	s.txns[id] = conn
+	return nil
+}
+
+func (s *session) finishTransaction(ctx context.Context, id, statement string) error {
+	s.txMu.Lock()
+	conn, ok := s.txns[id]
+	if ok {
+		delete(s.txns, id)
+	}
+	s.txMu.Unlock()
+	if !ok {
+		return fmt.Errorf("no active transaction %q", id)
+	}
+	defer conn.Close()
+	_, err := conn.ExecContext(ctx, statement)
+	return err
+}
+
+func (s *session) CommitTransaction(ctx context.Context, id string) error {
+	return s.finishTransaction(ctx, id, "COMMIT")
+}
+
+func (s *session) RollbackTransaction(ctx context.Context, id string) error {
+	return s.finishTransaction(ctx, id, "ROLLBACK")
 }
 
 func (s *session) FetchCell(ref string) (*drivers.Value, bool) {
@@ -158,10 +237,34 @@ func (s *session) Introspect(ctx context.Context, scope drivers.IntrospectScope)
 	switch {
 	case scope.Table != "":
 		return s.introspectColumns(ctx, scope.Schema, scope.Table)
+	case scope.Category != "":
+		return s.introspectCategory(ctx, scope.Schema, scope.Category)
 	case scope.Schema != "":
-		return s.introspectRelations(ctx, scope.Schema)
+		return s.introspectGroups(), nil
 	default:
 		return s.introspectSchemas(ctx)
+	}
+}
+
+func (s *session) introspectGroups() *drivers.SchemaTree {
+	return &drivers.SchemaTree{Nodes: []drivers.SchemaNode{
+		{Kind: "group", Name: "Tables", Scope: "table", HasChildren: true},
+		{Kind: "group", Name: "Views", Scope: "view", HasChildren: true},
+		{Kind: "group", Name: "Routines", Scope: "routine", HasChildren: true},
+		{Kind: "group", Name: "Triggers", Scope: "trigger", HasChildren: true},
+	}}
+}
+
+func (s *session) introspectCategory(ctx context.Context, schema, category string) (*drivers.SchemaTree, error) {
+	switch category {
+	case "table", "view":
+		return s.introspectRelations(ctx, schema, category)
+	case "routine":
+		return s.introspectRoutines(ctx, schema)
+	case "trigger":
+		return s.introspectTriggers(ctx, schema)
+	default:
+		return &drivers.SchemaTree{}, nil
 	}
 }
 
@@ -185,11 +288,15 @@ ORDER BY schema_name`)
 	return tree, rows.Err()
 }
 
-func (s *session) introspectRelations(ctx context.Context, schema string) (*drivers.SchemaTree, error) {
+func (s *session) introspectRelations(ctx context.Context, schema, category string) (*drivers.SchemaTree, error) {
+	tableType := "BASE TABLE"
+	if category == "view" {
+		tableType = "VIEW"
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT table_name, table_type FROM information_schema.tables
-WHERE table_schema = ?
-ORDER BY table_name`, schema)
+WHERE table_schema = ? AND table_type = ?
+ORDER BY table_name`, schema, tableType)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +312,42 @@ ORDER BY table_name`, schema)
 			kind = "view"
 		}
 		tree.Nodes = append(tree.Nodes, drivers.SchemaNode{Kind: kind, Name: name, HasChildren: true})
+	}
+	return tree, rows.Err()
+}
+
+func (s *session) introspectRoutines(ctx context.Context, schema string) (*drivers.SchemaTree, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT routine_name, routine_type FROM information_schema.routines
+WHERE routine_schema = ? ORDER BY routine_name`, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tree := &drivers.SchemaTree{}
+	for rows.Next() {
+		var name, typ string
+		if err := rows.Scan(&name, &typ); err != nil {
+			return nil, err
+		}
+		tree.Nodes = append(tree.Nodes, drivers.SchemaNode{Kind: "routine", Name: name, Detail: strings.ToLower(typ)})
+	}
+	return tree, rows.Err()
+}
+
+func (s *session) introspectTriggers(ctx context.Context, schema string) (*drivers.SchemaTree, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT trigger_name, event_object_table FROM information_schema.triggers
+WHERE trigger_schema = ? ORDER BY trigger_name`, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tree := &drivers.SchemaTree{}
+	for rows.Next() {
+		var name, table string
+		if err := rows.Scan(&name, &table); err != nil {
+			return nil, err
+		}
+		tree.Nodes = append(tree.Nodes, drivers.SchemaNode{Kind: "trigger", Name: name, Detail: table})
 	}
 	return tree, rows.Err()
 }
@@ -307,11 +450,27 @@ func (s *session) Execute(ctx context.Context, req drivers.QueryRequest, sink dr
 		return summary, nil
 	}
 
-	conn, err := s.db.Conn(qctx)
+	var conn *sql.Conn
+	if req.TransactionID != "" {
+		s.txMu.Lock()
+		defer s.txMu.Unlock()
+		conn = s.txns[req.TransactionID]
+		if conn == nil {
+			return finish(fmt.Errorf("no active transaction %q", req.TransactionID))
+		}
+	} else {
+		var err error
+		conn, err = s.db.Conn(qctx)
+		if err != nil {
+			return finish(err)
+		}
+		defer conn.Close()
+	}
+	restoreContext, err := applySchemaContext(qctx, conn, req.SchemaContext)
 	if err != nil {
 		return finish(err)
 	}
-	defer conn.Close()
+	defer restoreContext()
 
 	// Pin the server-side connection id so Cancel can KILL QUERY it.
 	var connID int64

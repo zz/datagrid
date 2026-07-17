@@ -67,6 +67,13 @@ type QueryRequest struct {
 	QueryID   QueryID `json:"queryId"`
 	Statement string  `json:"statement"`
 	MaxRows   int     `json:"maxRows"` // page cap before UI switches to explicit paging
+	// TransactionID routes execution through a connection pinned by
+	// TransactionController. Empty means normal auto-commit execution.
+	TransactionID string `json:"transactionId,omitempty"`
+	// SchemaContext is an ordered PostgreSQL search_path. MySQL uses the
+	// first entry as the per-query default database. Drivers restore the prior
+	// connection state before returning pooled connections.
+	SchemaContext []string `json:"schemaContext,omitempty"`
 	// Args are optional bound parameters (used by table paging/filtering).
 	Args []any `json:"-"`
 }
@@ -79,8 +86,11 @@ type QuerySummary struct {
 	DurationMs   int64   `json:"durationMs"`
 	// Truncated means the result hit QueryRequest.MaxRows and the UI
 	// should offer explicit paging.
-	Truncated bool   `json:"truncated"`
-	Error     string `json:"error,omitempty"`
+	Truncated   bool   `json:"truncated"`
+	Error       string `json:"error,omitempty"`
+	ResultIndex int    `json:"resultIndex"`
+	Statement   string `json:"statement,omitempty"`
+	Final       bool   `json:"final"`
 }
 
 // Column describes one result column.
@@ -92,10 +102,11 @@ type Column struct {
 // RowBatch is one streamed chunk of results (~500 rows / 256 KB).
 // Columns is set only on the first batch (Seq == 0).
 type RowBatch struct {
-	QueryID QueryID  `json:"queryId"`
-	Columns []Column `json:"columns,omitempty"`
-	Rows    [][]any  `json:"rows"` // cells are tagged values, see Value
-	Seq     int      `json:"seq"`
+	QueryID     QueryID  `json:"queryId"`
+	Columns     []Column `json:"columns,omitempty"`
+	Rows        [][]any  `json:"rows"` // cells are tagged values, see Value
+	Seq         int      `json:"seq"`
+	ResultIndex int      `json:"resultIndex"`
 }
 
 // Value is a tagged cell value so the grid can render/edit type-faithfully:
@@ -127,6 +138,7 @@ type IntrospectScope struct {
 	Database string `json:"database,omitempty"`
 	Schema   string `json:"schema,omitempty"`
 	Table    string `json:"table,omitempty"`
+	Category string `json:"category,omitempty"`
 }
 
 // SchemaNode is one node in the schema tree (database, schema, table, view,
@@ -135,7 +147,9 @@ type SchemaNode struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
 	// Detail is secondary display text, e.g. a column's type.
-	Detail   string       `json:"detail,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	// Scope is the category value used to lazily load group nodes.
+	Scope    string       `json:"scope,omitempty"`
 	Children []SchemaNode `json:"children,omitempty"`
 	// HasChildren signals the UI to show an expander even when Children
 	// haven't been introspected yet.
@@ -169,6 +183,41 @@ type AutocompleteProvider interface {
 // on the server, for the connection's database switcher.
 type DatabaseLister interface {
 	ListServerDatabases(ctx context.Context) ([]string, error)
+}
+
+// TransactionController pins manual transactions to a console identity.
+type TransactionController interface {
+	BeginTransaction(ctx context.Context, id string) error
+	CommitTransaction(ctx context.Context, id string) error
+	RollbackTransaction(ctx context.Context, id string) error
+}
+
+// ObjectDefiner returns the engine-native DDL/source for a schema object.
+type ObjectDefiner interface {
+	ObjectDDL(ctx context.Context, kind, schema, name string) (string, error)
+}
+
+type DataSearchRequest struct {
+	Query      string `json:"query"`
+	MaxTables  int    `json:"maxTables"`
+	MaxResults int    `json:"maxResults"`
+}
+
+type DataSearchMatch struct {
+	Schema string `json:"schema"`
+	Table  string `json:"table"`
+	Column string `json:"column"`
+	Value  string `json:"value"`
+}
+
+type DataSearchResult struct {
+	Matches       []DataSearchMatch `json:"matches"`
+	TablesScanned int               `json:"tablesScanned"`
+	Limited       bool              `json:"limited"`
+}
+
+type DataSearcher interface {
+	SearchData(ctx context.Context, request DataSearchRequest) (*DataSearchResult, error)
 }
 
 // Session is one live connection (backed by a pool for SQL engines).

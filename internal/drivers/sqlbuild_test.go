@@ -5,8 +5,9 @@ import "testing"
 // pgLike is a Postgres-style dialect for exercising the shared builders
 // without a live database.
 var pgLike = Dialect{
-	Quote: func(s string) string { return `"` + s + `"` },
-	Param: func(n int) string { return "$" + itoa(n) },
+	Quote:         func(s string) string { return `"` + s + `"` },
+	Param:         func(n int) string { return "$" + itoa(n) },
+	DefaultValues: "DEFAULT VALUES",
 }
 
 func itoa(n int) string {
@@ -121,6 +122,63 @@ func TestBuildChangesetUpdate(t *testing.T) {
 	}
 }
 
+func TestBuildChangesetUsesOriginalValuesForOptimisticLocking(t *testing.T) {
+	req := ChangesetRequest{
+		Table: "users",
+		Changes: []RowChange{{
+			Kind: "update",
+			Set:  map[string]CellInput{"name": {Text: "Grace"}},
+			Key:  map[string]CellInput{"id": {Text: "7"}},
+			Original: map[string]CellInput{
+				"id":    {Text: "7"},
+				"name":  {Text: "Ada"},
+				"email": {Null: true},
+			},
+		}},
+	}
+	stmts, err := pgLike.BuildChangeset(req, []string{"id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `UPDATE "users" SET "name" = $1 WHERE "id" = $2 AND "email" IS NULL AND "name" = $3`
+	if stmts[0].SQL != want {
+		t.Fatalf("sql:\n got %s\nwant %s", stmts[0].SQL, want)
+	}
+	if got := stmts[0].Args; len(got) != 3 || got[0] != "Grace" || got[1] != "7" || got[2] != "Ada" {
+		t.Fatalf("args = %v", got)
+	}
+	if stmts[0].ChangeIndex != 0 || stmts[0].Kind != "update" || stmts[0].Key["id"].Text != "7" {
+		t.Fatalf("statement metadata = %+v", stmts[0])
+	}
+
+	req.Force = true
+	forced, err := pgLike.BuildChangeset(req, []string{"id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `UPDATE "users" SET "name" = $1 WHERE "id" = $2`; forced[0].SQL != want {
+		t.Fatalf("forced sql:\n got %s\nwant %s", forced[0].SQL, want)
+	}
+}
+
+func TestBuildChangesetDeleteUsesOriginalValues(t *testing.T) {
+	stmts, err := pgLike.BuildChangeset(ChangesetRequest{
+		Table: "users",
+		Changes: []RowChange{{
+			Kind:     "delete",
+			Key:      map[string]CellInput{"id": {Text: "9"}},
+			Original: map[string]CellInput{"status": {Text: "active"}},
+		}},
+	}, []string{"id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `DELETE FROM "users" WHERE "id" = $1 AND "status" = $2`
+	if stmts[0].SQL != want {
+		t.Fatalf("sql:\n got %s\nwant %s", stmts[0].SQL, want)
+	}
+}
+
 func TestBuildChangesetInsertDelete(t *testing.T) {
 	stmts, err := pgLike.BuildChangeset(ChangesetRequest{
 		Table: "t",
@@ -137,6 +195,35 @@ func TestBuildChangesetInsertDelete(t *testing.T) {
 	}
 	if stmts[1].SQL != `DELETE FROM "t" WHERE "id" = $1` {
 		t.Errorf("delete sql: %s", stmts[1].SQL)
+	}
+}
+
+func TestBuildChangesetDefaultValuesInsert(t *testing.T) {
+	stmts, err := pgLike.BuildChangeset(ChangesetRequest{
+		Table: "events", Changes: []RowChange{{Kind: "insert", Set: map[string]CellInput{}}},
+	}, []string{"id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stmts[0].SQL, `INSERT INTO "events" DEFAULT VALUES`; got != want {
+		t.Fatalf("sql:\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestBuildChangesetMySQLDefaultValuesInsert(t *testing.T) {
+	mysqlLike := Dialect{
+		Quote:         func(s string) string { return "`" + s + "`" },
+		Param:         func(int) string { return "?" },
+		DefaultValues: "() VALUES ()",
+	}
+	stmts, err := mysqlLike.BuildChangeset(ChangesetRequest{
+		Table: "events", Changes: []RowChange{{Kind: "insert", Set: map[string]CellInput{}}},
+	}, []string{"id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stmts[0].SQL, "INSERT INTO `events` () VALUES ()"; got != want {
+		t.Fatalf("sql:\n got %s\nwant %s", got, want)
 	}
 }
 

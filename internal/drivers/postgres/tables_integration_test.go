@@ -22,6 +22,12 @@ func TestTableInfoPK(t *testing.T) {
 	if len(info.Columns) < 5 {
 		t.Errorf("want several columns, got %d", len(info.Columns))
 	}
+	if !slices.ContainsFunc(info.Constraints, func(c drivers.ConstraintInfo) bool { return c.Kind == "primary_key" }) {
+		t.Errorf("expected primary-key constraint, got %#v", info.Constraints)
+	}
+	if len(info.Indexes) == 0 {
+		t.Error("expected table indexes")
+	}
 	// id is NOT NULL.
 	for _, c := range info.Columns {
 		if c.Name == "id" && c.Nullable {
@@ -108,6 +114,22 @@ func TestApplyChangesRoundTrip(t *testing.T) {
 	}
 	id := page.Rows[0][idCol].(drivers.Value)
 	idText := toText(t, id)
+
+	// A stale original value must roll back instead of overwriting the row.
+	stale, err := te.ApplyChanges(ctx, drivers.ChangesetRequest{
+		Schema: "app", Table: "users",
+		Changes: []drivers.RowChange{{Kind: "update",
+			Set:      map[string]drivers.CellInput{"score": {Text: "8.88"}},
+			Key:      map[string]drivers.CellInput{"id": {Text: idText}},
+			Original: map[string]drivers.CellInput{"score": {Text: "999"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("stale update: %v", err)
+	}
+	if stale.RowsAffected != 0 || len(stale.Conflicts) != 1 {
+		t.Fatalf("stale update result = %+v", stale)
+	}
 
 	// Update the score.
 	upd, err := te.ApplyChanges(ctx, drivers.ChangesetRequest{
@@ -201,4 +223,37 @@ func TestExplain(t *testing.T) {
 		t.Errorf("expected plan detail or children, got %+v", plan)
 	}
 	t.Logf("plan: %s %s", plan.Label, plan.Detail)
+}
+
+func TestManualTransactionRollback(t *testing.T) {
+	sess := testSession(t)
+	tx := sess.(drivers.TransactionController)
+	te := sess.(drivers.TableEditor)
+	ctx := context.Background()
+	const id = "test-console-rollback"
+	const email = "manual-tx-rollback@example.com"
+
+	if err := tx.BeginTransaction(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := sess.Execute(ctx, drivers.QueryRequest{
+		QueryID: "tx-insert", TransactionID: id,
+		Statement: "INSERT INTO app.users (email, active, score) VALUES ('" + email + "', true, 1)",
+	}, func(drivers.RowBatch) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Error != "" {
+		t.Fatal(summary.Error)
+	}
+	if err := tx.RollbackTransaction(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	page, err := te.ReadPage(ctx, drivers.PageRequest{Schema: "app", Table: "users", Filters: []drivers.FilterSpec{{Column: "email", Op: "=", Value: email}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Rows) != 0 {
+		t.Fatalf("rolled-back row is visible")
+	}
 }

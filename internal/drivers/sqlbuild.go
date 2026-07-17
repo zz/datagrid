@@ -12,6 +12,9 @@ type Dialect struct {
 	Quote func(string) string
 	// Param renders the n-th (1-based) bind placeholder ($1 vs ?).
 	Param func(n int) string
+	// DefaultValues is the engine-specific suffix for an insert that relies
+	// entirely on column defaults (DEFAULT VALUES vs () VALUES ()).
+	DefaultValues string
 }
 
 // filterOps maps UI operators to SQL. "contains"/"starts" become LIKE with
@@ -117,9 +120,12 @@ func (d Dialect) BuildCount(req PageRequest) (string, []any, error) {
 // Statement is one generated changeset statement: a preview with inlined
 // literals plus the parameterized form actually executed.
 type Statement struct {
-	Preview string
-	SQL     string
-	Args    []any
+	Preview     string
+	SQL         string
+	Args        []any
+	ChangeIndex int
+	Kind        string
+	Key         map[string]CellInput
 }
 
 func sortedKeys(m map[string]CellInput) []string {
@@ -155,12 +161,17 @@ func (d Dialect) BuildChangeset(req ChangesetRequest, pk []string) ([]Statement,
 	qtable := d.qualified(req.Schema, req.Table)
 	out := make([]Statement, 0, len(req.Changes))
 
-	for _, ch := range req.Changes {
+	for changeIndex, ch := range req.Changes {
 		switch ch.Kind {
 		case "insert":
 			cols := sortedKeys(ch.Set)
 			if len(cols) == 0 {
-				return nil, fmt.Errorf("insert with no columns")
+				if d.DefaultValues == "" {
+					return nil, fmt.Errorf("insert with no columns")
+				}
+				body := fmt.Sprintf("INSERT INTO %s %s", qtable, d.DefaultValues)
+				out = append(out, Statement{Preview: body, SQL: body, ChangeIndex: changeIndex, Kind: ch.Kind, Key: ch.Key})
+				continue
 			}
 			qcols := make([]string, len(cols))
 			ph := make([]string, len(cols))
@@ -174,7 +185,7 @@ func (d Dialect) BuildChangeset(req ChangesetRequest, pk []string) ([]Statement,
 			}
 			body := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", qtable, strings.Join(qcols, ", "), strings.Join(ph, ", "))
 			preview := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", qtable, strings.Join(qcols, ", "), strings.Join(pv, ", "))
-			out = append(out, Statement{Preview: preview, SQL: body, Args: args})
+			out = append(out, Statement{Preview: preview, SQL: body, Args: args, ChangeIndex: changeIndex, Kind: ch.Kind, Key: ch.Key})
 
 		case "update":
 			if len(pk) == 0 {
@@ -199,9 +210,17 @@ func (d Dialect) BuildChangeset(req ChangesetRequest, pk []string) ([]Statement,
 				return nil, err
 			}
 			args = append(args, wargs...)
+			if !req.Force {
+				originalSQL, originalPrev, originalArgs := d.originalWhere(ch.Original, pk, &n)
+				if originalSQL != "" {
+					whereSQL += " AND " + originalSQL
+					wherePrev += " AND " + originalPrev
+					args = append(args, originalArgs...)
+				}
+			}
 			body := fmt.Sprintf("UPDATE %s SET %s WHERE %s", qtable, strings.Join(setSQL, ", "), whereSQL)
 			preview := fmt.Sprintf("UPDATE %s SET %s WHERE %s", qtable, strings.Join(setPrev, ", "), wherePrev)
-			out = append(out, Statement{Preview: preview, SQL: body, Args: args})
+			out = append(out, Statement{Preview: preview, SQL: body, Args: args, ChangeIndex: changeIndex, Kind: ch.Kind, Key: ch.Key})
 
 		case "delete":
 			if len(pk) == 0 {
@@ -212,15 +231,50 @@ func (d Dialect) BuildChangeset(req ChangesetRequest, pk []string) ([]Statement,
 			if err != nil {
 				return nil, err
 			}
+			if !req.Force {
+				originalSQL, originalPrev, originalArgs := d.originalWhere(ch.Original, pk, &n)
+				if originalSQL != "" {
+					whereSQL += " AND " + originalSQL
+					wherePrev += " AND " + originalPrev
+					wargs = append(wargs, originalArgs...)
+				}
+			}
 			body := fmt.Sprintf("DELETE FROM %s WHERE %s", qtable, whereSQL)
 			preview := fmt.Sprintf("DELETE FROM %s WHERE %s", qtable, wherePrev)
-			out = append(out, Statement{Preview: preview, SQL: body, Args: wargs})
+			out = append(out, Statement{Preview: preview, SQL: body, Args: wargs, ChangeIndex: changeIndex, Kind: ch.Kind, Key: ch.Key})
 
 		default:
 			return nil, fmt.Errorf("unknown change kind %q", ch.Kind)
 		}
 	}
 	return out, nil
+}
+
+// originalWhere adds optimistic-lock predicates for the values loaded into
+// the grid. Primary-key columns are already covered by pkWhere.
+func (d Dialect) originalWhere(original map[string]CellInput, pk []string, n *int) (sql, preview string, args []any) {
+	pkSet := make(map[string]bool, len(pk))
+	for _, col := range pk {
+		pkSet[col] = true
+	}
+	var conds, prevs []string
+	for _, col := range sortedKeys(original) {
+		if pkSet[col] {
+			continue
+		}
+		value := original[col]
+		if value.Null {
+			predicate := d.Quote(col) + " IS NULL"
+			conds = append(conds, predicate)
+			prevs = append(prevs, predicate)
+			continue
+		}
+		*n++
+		conds = append(conds, fmt.Sprintf("%s = %s", d.Quote(col), d.Param(*n)))
+		prevs = append(prevs, fmt.Sprintf("%s = %s", d.Quote(col), previewLiteral(value)))
+		args = append(args, argOf(value))
+	}
+	return strings.Join(conds, " AND "), strings.Join(prevs, " AND "), args
 }
 
 // pkWhere builds the "pk1 = $n AND ..." clause. n is advanced in place so
