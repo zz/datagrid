@@ -4,13 +4,13 @@ import { displayValue } from '../../ipc/types'
 export type PivotAggregate = 'count' | 'sum' | 'average' | 'min' | 'max'
 export interface PivotResult { columns: string[]; rows: Array<{ label: string; values: Array<number | null>; total: number | null }> }
 
-export function buildPivot(rows: Value[][], rowIndex: number, columnIndex: number | null, valueIndex: number, aggregate: PivotAggregate): PivotResult {
-    const columnLabels = columnIndex == null ? ['Value'] : [...new Set(rows.map(row => displayValue(row[columnIndex] ?? { t: 'null' })))].sort()
-    const rowLabels = [...new Set(rows.map(row => displayValue(row[rowIndex] ?? { t: 'null' })))].sort()
+export function buildPivot(rows: Value[][], rowIndex: number, columnIndex: number | null, valueIndex: number, aggregate: PivotAggregate, format: (value: Value, columnIndex: number) => string = value => displayValue(value)): PivotResult {
+    const columnLabels = columnIndex == null ? ['Value'] : [...new Set(rows.map(row => format(row[columnIndex] ?? { t: 'null' }, columnIndex)))].sort()
+    const rowLabels = [...new Set(rows.map(row => format(row[rowIndex] ?? { t: 'null' }, rowIndex)))].sort()
     const buckets = new Map<string, number[]>()
     rows.forEach(row => {
-        const rowLabel = displayValue(row[rowIndex] ?? { t: 'null' })
-        const columnLabel = columnIndex == null ? 'Value' : displayValue(row[columnIndex] ?? { t: 'null' })
+        const rowLabel = format(row[rowIndex] ?? { t: 'null' }, rowIndex)
+        const columnLabel = columnIndex == null ? 'Value' : format(row[columnIndex] ?? { t: 'null' }, columnIndex)
         const value = Number(row[valueIndex]?.v)
         const bucket = `${rowLabel}\0${columnLabel}`
         if (!buckets.has(bucket)) buckets.set(bucket, [])
@@ -27,7 +27,7 @@ export function buildPivot(rows: Value[][], rowIndex: number, columnIndex: numbe
         columns: columnLabels,
         rows: rowLabels.map(label => {
             const values = columnLabels.map(column => reduce(buckets.get(`${label}\0${column}`) ?? []))
-            const source = rows.filter(row => displayValue(row[rowIndex] ?? { t: 'null' }) === label)
+            const source = rows.filter(row => format(row[rowIndex] ?? { t: 'null' }, rowIndex) === label)
             const totals = source.flatMap(row => {
                 const value = Number(row[valueIndex]?.v)
                 return aggregate === 'count' ? [1] : Number.isFinite(value) ? [value] : []

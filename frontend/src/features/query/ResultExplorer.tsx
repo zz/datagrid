@@ -3,7 +3,6 @@ import { BarChart3, Check, ChevronLeft, ChevronRight, ChevronsDown, ChevronsLeft
 import { ApplyChangeset, Copy as CopyText, OpenTable, PreviewChangeset } from '../../../wailsjs/go/api/App'
 import { drivers } from '../../../wailsjs/go/models'
 import type { Column, Value } from '../../ipc/types'
-import { displayValue } from '../../ipc/types'
 import ResultsGrid from '../../components/ResultsGrid'
 import NameDialog from '../../components/NameDialog'
 import { buildChartData, numericColumnIndexes } from './resultAnalysis'
@@ -25,6 +24,7 @@ import { limitResultRows, processResultRows, resultViewSorts, type ResultViewSta
 import { loadResultViewState, resultViewStorageKey, saveResultViewState } from './resultViewPersistence'
 import ResultViewControls from './ResultViewControls'
 import { loadResultColumnLayout, normalizeResultColumnLayout, resultColumnIds, resultColumnLayoutKey, resultVisibleColumnIndexes, saveResultColumnLayout, type ResultColumnLayout } from './resultColumnLayout'
+import { formatResultCell, loadResultColumnFormats, normalizeResultColumnFormats, resultColumnFormattingKey, saveResultColumnFormats, type ResultColumnFormats } from './resultColumnFormatting'
 
 interface ResultExplorerProps {
     connId: string; columns: Column[]; rows: Value[][]; resultLabel?: string; statement?: string; defaultSchema?: string
@@ -100,6 +100,16 @@ export default function ResultExplorer({ connId, columns, rows, resultLabel = 'R
         setStoredColumnLayout(current => current.key === columnLayoutKey ? { key: columnLayoutKey, layout: normalized } : current)
         if (typeof window !== 'undefined') saveResultColumnLayout(columnLayoutKey, normalized)
     }, [columnIds, columnLayoutKey])
+    const columnFormattingKey = useMemo(() => resultColumnFormattingKey(columnLayoutKey), [columnLayoutKey])
+    const [storedColumnFormats, setStoredColumnFormats] = useState(() => ({ key: columnFormattingKey, formats: loadResultColumnFormats(columnFormattingKey, columnIds) }))
+    if (storedColumnFormats.key !== columnFormattingKey) setStoredColumnFormats({ key: columnFormattingKey, formats: loadResultColumnFormats(columnFormattingKey, columnIds) })
+    const columnFormats = useMemo(() => normalizeResultColumnFormats(storedColumnFormats.key === columnFormattingKey ? storedColumnFormats.formats : {}, columnIds), [columnFormattingKey, columnIds, storedColumnFormats])
+    const updateColumnFormats = useCallback((formats: ResultColumnFormats) => {
+        const normalized = normalizeResultColumnFormats(formats, columnIds)
+        setStoredColumnFormats(current => current.key === columnFormattingKey ? { key: columnFormattingKey, formats: normalized } : current)
+        if (typeof window !== 'undefined') saveResultColumnFormats(columnFormattingKey, normalized)
+    }, [columnFormattingKey, columnIds])
+    const formatCell = useCallback((value: Value, columnIndex: number) => formatResultCell(value, columns[columnIndex], columnFormats[columnIds[columnIndex]]), [columnFormats, columnIds, columns])
     const countLoader = useRef(loadResultCount)
     useEffect(() => { countLoader.current = loadResultCount }, [loadResultCount])
     useEffect(() => {
@@ -178,14 +188,14 @@ export default function ResultExplorer({ connId, columns, rows, resultLabel = 'R
     useEffect(() => { if (!numeric.includes(pivotValue)) setPivotValue(numeric[0] ?? 0) }, [numeric, pivotValue])
     useEffect(() => { if (!numeric.length && pivotAggregate !== 'count') setPivotAggregate('count') }, [numeric.length, pivotAggregate])
     useEffect(() => { if (!visibleColumnIndexes.includes(pivotRow)) setPivotRow(visibleColumnIndexes[0] ?? 0); if (pivotColumn >= 0 && !visibleColumnIndexes.includes(pivotColumn)) setPivotColumn(-1) }, [pivotColumn, pivotRow, visibleColumnIndexes])
-    const points = useMemo(() => buildChartData(visibleRows, labelIndex, valueIndex), [labelIndex, visibleRows, valueIndex])
+    const points = useMemo(() => buildChartData(visibleRows, labelIndex, valueIndex, 100, formatCell), [formatCell, labelIndex, visibleRows, valueIndex])
     const projectedRows = useMemo(() => visibleRows.map(row => visibleColumnIndexes.map(index => row[index] ?? { t: 'null' })), [visibleColumnIndexes, visibleRows])
     const current = useMemo<ResultSnapshot>(() => ({ id: 'current', label: resultLabel, columns: visibleColumns, rows: projectedRows }), [projectedRows, resultLabel, visibleColumns])
     const baseline = pinned.find(item => item.id === baselineId) ?? pinned[0]
     const commonKeys = useMemo(() => baseline ? commonColumnNames(baseline, current) : [], [baseline, current])
     useEffect(() => { if (keyColumn && !commonKeys.includes(keyColumn)) setKeyColumn('') }, [commonKeys, keyColumn])
     const compared = useMemo(() => baseline ? compareResultRows(baseline, current, keyColumn) : [], [baseline, current, keyColumn])
-    const pivot = useMemo(() => buildPivot(visibleRows, pivotRow, pivotColumn < 0 ? null : pivotColumn, pivotValue, pivotAggregate), [pivotAggregate, pivotColumn, pivotRow, pivotValue, visibleRows])
+    const pivot = useMemo(() => buildPivot(visibleRows, pivotRow, pivotColumn < 0 ? null : pivotColumn, pivotValue, pivotAggregate, formatCell), [formatCell, pivotAggregate, pivotColumn, pivotRow, pivotValue, visibleRows])
     const pinCurrent = (label: string) => { const createdAt = Date.now(); const item = { ...current, id: `pinned-${createdAt}`, label: label.trim(), connId, statement, createdAt, sourceRowCount: visibleRows.length, truncated: resultIncomplete, rows: current.rows.map(row => [...row]) }; const saved = onPin(item); setBaselineId(saved.id); setNamingSnapshot(false) }
 
     const commitResultState = useCallback((nextRows: Value[][], nextEdits: Record<string, ResultCellEdit>, nextInsertedRows = insertedRows, nextDeletedRows = deletedRows) => {
@@ -342,13 +352,13 @@ export default function ResultExplorer({ connId, columns, rows, resultLabel = 'R
             {totalRows == null && truncated && !canFetchMore && <span className="result-limit-state">Row limit reached</span>}
             <button onClick={() => setNamingSnapshot(true)} title="Save a named result snapshot"><Pin size={12} /> Snapshot{pinned.length ? ` ${pinned.length}` : ''}</button>
         </div>
-        {mode !== 'grid' && <ResultViewControls columns={columns} columnIds={columnIds} columnLayout={columnLayout} rows={visibleRows.length} view={resultView} presetContextKey={columnLayoutKey} engine={engine} serverActive={!dirty && canFetchMore && !!onServerViewChange} serverBusy={fetching} onChange={updateResultView} onColumnLayoutChange={updateColumnLayout} />}
+        {mode !== 'grid' && <ResultViewControls columns={columns} columnIds={columnIds} columnLayout={columnLayout} columnFormats={columnFormats} rows={visibleRows.length} view={resultView} presetContextKey={columnLayoutKey} engine={engine} serverActive={!dirty && canFetchMore && !!onServerViewChange} serverBusy={fetching} onChange={updateResultView} onColumnLayoutChange={updateColumnLayout} onColumnFormatsChange={updateColumnFormats} />}
         {editError && <div className="result-edit-error">{editError}</div>}
-        {mode === 'grid' ? <ResultsGrid key={viewStorageKey} connId={connId} columns={columns} rows={workingRows} editable={editable} editedCells={editedCells} insertedRows={insertedRows} deletedRows={deletedRows} columnDetails={tableInfo?.columns ?? []} foreignKeys={tableInfo?.foreignKeys ?? []} sqlTable={editTarget && tableInfo ? `${tableInfo.schema}.${tableInfo.table}` : undefined} sqlEngine={engine} exportBaseName={resultLabel.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'query-result'} truncated={resultIncomplete} onCellsEdit={stageCellEdits} onToggleDeleteRow={toggleDeleteRow} onOpenTypedEditor={openResultCellEditor} onNavigateForeignKey={(foreignKey, referencedColumn, value) => void openTableWithFilter(connId, foreignKey.referencedSchema || tableInfo?.schema || defaultSchema, foreignKey.referencedTable, referencedColumn, value)} onOpenForeignKeyLookup={(foreignKey, sourceRow) => setForeignKeyLookup({ foreignKey, rowIndex: sourceRow })} onDuplicateRows={stageDuplicateRows} onSetRowsDeleted={setRowsDeleted} serverViewBusy={fetching} serverViewActive={!dirty && canFetchMore && !!onServerViewChange} loadServerFacet={!dirty && canFetchMore ? loadServerFacet : undefined} initialViewState={resultView} onViewStateChange={updateResultView} initialColumnLayout={columnLayout} onColumnLayoutChange={updateColumnLayout} /> : mode === 'record' ? <div className={`record-view ${deletedRows.has(recordSourceRow) ? 'deleted' : ''}`}>
+        {mode === 'grid' ? <ResultsGrid key={viewStorageKey} connId={connId} columns={columns} rows={workingRows} editable={editable} editedCells={editedCells} insertedRows={insertedRows} deletedRows={deletedRows} columnDetails={tableInfo?.columns ?? []} foreignKeys={tableInfo?.foreignKeys ?? []} sqlTable={editTarget && tableInfo ? `${tableInfo.schema}.${tableInfo.table}` : undefined} sqlEngine={engine} exportBaseName={resultLabel.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'query-result'} truncated={resultIncomplete} onCellsEdit={stageCellEdits} onToggleDeleteRow={toggleDeleteRow} onOpenTypedEditor={openResultCellEditor} onNavigateForeignKey={(foreignKey, referencedColumn, value) => void openTableWithFilter(connId, foreignKey.referencedSchema || tableInfo?.schema || defaultSchema, foreignKey.referencedTable, referencedColumn, value)} onOpenForeignKeyLookup={(foreignKey, sourceRow) => setForeignKeyLookup({ foreignKey, rowIndex: sourceRow })} onDuplicateRows={stageDuplicateRows} onSetRowsDeleted={setRowsDeleted} serverViewBusy={fetching} serverViewActive={!dirty && canFetchMore && !!onServerViewChange} loadServerFacet={!dirty && canFetchMore ? loadServerFacet : undefined} initialViewState={resultView} onViewStateChange={updateResultView} initialColumnLayout={columnLayout} onColumnLayoutChange={updateColumnLayout} columnFormats={columnFormats} onColumnFormatsChange={updateColumnFormats} /> : mode === 'record' ? <div className={`record-view ${deletedRows.has(recordSourceRow) ? 'deleted' : ''}`}>
             {visibleRows.length === 0 ? <div className="results-empty">No result row selected.</div> : visibleColumnIndexes.map((index, displayedIndex) => {
                 const column = columns[index]
                 const value = visibleRows[rowIndex]?.[index] ?? { t: 'null' }
-                const text = displayValue(value)
+                const text = formatCell(value, index)
                 const detail = tableInfo?.columns?.find(item => item.name === column.name)
                 const foreignKey = foreignKeyForColumn(tableInfo?.foreignKeys ?? [], column.name)
                 const foreignKeyIndex = foreignKey?.columns.indexOf(column.name) ?? -1

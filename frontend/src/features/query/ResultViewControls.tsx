@@ -7,6 +7,8 @@ import ResultFilterPresetMenu from './ResultFilterPresetMenu'
 import { createResultFilterPreset, loadResultFilterPresets, type ResultFilterPreset, saveResultFilterPresets } from './resultFilterPresets'
 import { moveResultSort, resultViewSorts, withResultSorts, type ResultFilter, type ResultFilterExpression, type ResultViewState } from './resultProcessing'
 import type { ResultColumnLayout } from './resultColumnLayout'
+import ResultColumnFormatControl from './ResultColumnFormatControl'
+import type { ResultColumnFormats } from './resultColumnFormatting'
 
 const FILTER_OPS = ['contains', '=', '!=', '<', '>', '<=', '>=', 'starts', 'is null', 'is not null']
 
@@ -14,10 +16,11 @@ const cloneExpression = (expression: ResultFilterExpression | null | undefined):
     ? { ...expression, groups: expression.groups.map(group => ({ ...group, filters: group.filters.map(filter => ({ ...filter, values: filter.values ? [...filter.values] : undefined })) })) }
     : null
 
-export default function ResultViewControls({ columns, columnIds, columnLayout, rows, view, presetContextKey, engine, serverActive = false, serverBusy = false, onChange, onColumnLayoutChange }: {
+export default function ResultViewControls({ columns, columnIds, columnLayout, columnFormats, rows, view, presetContextKey, engine, serverActive = false, serverBusy = false, onChange, onColumnLayoutChange, onColumnFormatsChange }: {
     columns: Column[]
     columnIds: string[]
     columnLayout: ResultColumnLayout
+    columnFormats: ResultColumnFormats
     rows: number
     view: ResultViewState
     presetContextKey: string
@@ -26,6 +29,7 @@ export default function ResultViewControls({ columns, columnIds, columnLayout, r
     serverBusy?: boolean
     onChange: (view: ResultViewState) => void
     onColumnLayoutChange: (layout: ResultColumnLayout) => void
+    onColumnFormatsChange: (formats: ResultColumnFormats) => void
 }) {
     const [filterColumn, setFilterColumn] = useState(0)
     const [filterOp, setFilterOp] = useState('contains')
@@ -87,6 +91,7 @@ export default function ResultViewControls({ columns, columnIds, columnLayout, r
         {sorts.length > 1 && <button className="icon-btn" onClick={() => updateSorts([])} title="Clear all sorting"><X size={12} /></button>}
         <select value={view.analysisLimit ?? 0} onChange={event => onChange({ ...view, analysisLimit: Number(event.target.value) || null })} aria-label="Analysis row limit" title="Maximum rows used by non-grid views"><option value={0}>All rows</option>{[100, 500, 1000, 5000, 10000].map(limit => <option value={limit} key={limit}>{limit.toLocaleString()} rows</option>)}</select>
         <ResultColumnLayoutControl columns={columns} columnIds={columnIds} layout={columnLayout} presetContextKey={presetContextKey} onChange={onColumnLayoutChange} />
+        <ResultColumnFormatControl columns={columns} columnIds={columnIds} formats={columnFormats} onChange={onColumnFormatsChange} />
         {serverActive && <span className={`result-server-view ${serverBusy ? 'busy' : ''}`} title={serverBusy ? 'Refreshing filtered rows from the database' : 'Filters and sorting apply at the database'}><Database size={12} /></span>}
         {showAdvanced && <AdvancedResultFilterDialog columns={columns} filters={view.filters} expression={expression} engine={engine} onCancel={() => setShowAdvanced(false)} onApply={next => { updateFilters(view.filters, next); setShowAdvanced(false) }} />}
     </div>

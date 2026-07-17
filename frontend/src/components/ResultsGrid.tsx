@@ -29,6 +29,8 @@ import { createResultFilterPreset, loadResultFilterPresets, ResultFilterPreset, 
 import type { ResultFacetRequest, ResultFacetResult, ResultServerView } from '../features/query/serverResultView'
 import AdvancedResultFilterDialog from '../features/query/AdvancedResultFilterDialog'
 import ResultColumnLayoutControl from '../features/query/ResultColumnLayoutControl'
+import ResultColumnFormatControl from '../features/query/ResultColumnFormatControl'
+import { formatResultCell, type ResultColumnFormats } from '../features/query/resultColumnFormatting'
 
 const FILTER_OPS = ['contains', '=', '!=', '<', '>', '<=', '>=', 'starts', 'is null', 'is not null']
 
@@ -61,9 +63,11 @@ interface Props {
     onViewStateChange?: (view: ResultViewState) => void
     initialColumnLayout?: ResultColumnLayout
     onColumnLayoutChange?: (layout: ResultColumnLayout) => void
+    columnFormats?: ResultColumnFormats
+    onColumnFormatsChange?: (formats: ResultColumnFormats) => void
 }
 
-export default function ResultsGrid({ connId, columns, rows, editable = false, editedCells = new Set(), insertedRows = new Set(), deletedRows = new Set(), columnDetails = [], foreignKeys = [], sqlTable, sqlEngine = 'postgres', exportBaseName = 'query-result', truncated = false, onCellsEdit, onToggleDeleteRow, onOpenTypedEditor, onNavigateForeignKey, onOpenForeignKeyLookup, onDuplicateRows, onSetRowsDeleted, onServerViewChange, serverViewBusy = false, serverViewActive = false, loadServerFacet, initialViewState, onViewStateChange, initialColumnLayout, onColumnLayoutChange }: Props) {
+export default function ResultsGrid({ connId, columns, rows, editable = false, editedCells = new Set(), insertedRows = new Set(), deletedRows = new Set(), columnDetails = [], foreignKeys = [], sqlTable, sqlEngine = 'postgres', exportBaseName = 'query-result', truncated = false, onCellsEdit, onToggleDeleteRow, onOpenTypedEditor, onNavigateForeignKey, onOpenForeignKeyLookup, onDuplicateRows, onSetRowsDeleted, onServerViewChange, serverViewBusy = false, serverViewActive = false, loadServerFacet, initialViewState, onViewStateChange, initialColumnLayout, onColumnLayoutChange, columnFormats = {}, onColumnFormatsChange }: Props) {
     const wrap = useRef<HTMLDivElement>(null)
     const [size, setSize] = useState({ w: 0, h: 0 })
     const [inspect, setInspect] = useState<{ column: string; cell: Value } | null>(null)
@@ -270,9 +274,10 @@ export default function ResultsGrid({ connId, columns, rows, editable = false, e
             if (!cell) {
                 return { kind: GridCellKind.Text, data: '', displayData: '', allowOverlay: false }
             }
-            const text = displayValue(cell)
+            const format = columnFormats[columnIds[sourceCol]]
+            const text = formatResultCell(cell, columns[sourceCol], format)
             const typeName = columnDetails.find(item => item.name === columns[sourceCol]?.name)?.typeName ?? columns[sourceCol]?.typeName ?? ''
-            if (cell.t !== 'null' && isBooleanColumn(typeName, cell.t)) {
+            if (cell.t !== 'null' && isBooleanColumn(typeName, cell.t) && format?.boolean !== 'yes-no') {
                 return {
                     kind: GridCellKind.Boolean,
                     data: cell.t === 'null' ? false : cell.v === true || String(cell.v).toLowerCase() === 'true' || String(cell.v) === '1',
@@ -294,13 +299,13 @@ export default function ResultsGrid({ connId, columns, rows, editable = false, e
             return {
                 kind: GridCellKind.Text,
                 data: cell.t === 'null' ? '' : text,
-                displayData: cell.t === 'null' ? 'NULL' : text.slice(0, 512),
+                displayData: text.slice(0, 512),
                 allowOverlay: true,
                 readonly: !editable || deleted,
                 themeOverride: background ? { bgCell: background } : cell.t === 'null' ? { textDark: '#8a8a90' } : undefined,
             }
         },
-        [columnDetails, columns, deletedCellBackground, deletedRows, editable, editedCellBackground, editedCells, insertedCellBackground, insertedRows, rows, shownRows, visibleColumnIndexes],
+        [columnDetails, columnFormats, columnIds, columns, deletedCellBackground, deletedRows, editable, editedCellBackground, editedCells, insertedCellBackground, insertedRows, rows, shownRows, visibleColumnIndexes],
     )
 
     const onCellsEdited = useCallback((values: readonly EditListItem[]) => {
@@ -363,6 +368,7 @@ export default function ResultsGrid({ connId, columns, rows, editable = false, e
                     {copyMenuOpen && selectedRange && <div className="result-copy-menu"><div><strong>{selectedRange.rows.length} rows × {selectedRange.columns.length} columns</strong><span>{selectedRange.cellCount.toLocaleString()} selected cells</span></div><button onClick={() => copySelection('csv')}>CSV with headers</button><button onClick={() => copySelection('tsv')}>TSV with headers</button><button onClick={() => copySelection('json')}>JSON objects</button><button disabled={!sqlTable} onClick={() => copySelection('sql')} title={sqlTable ? `INSERT statements for ${sqlTable}` : 'SQL copy requires a single-table result'}>SQL INSERT</button></div>}
                 </div>
                 <ResultColumnLayoutControl columns={columns} columnIds={columnIds} layout={layout} presetContextKey={layoutKey} onChange={updateLayout} onOpen={() => setCopyMenuOpen(false)} onReset={() => setWidths({})} />
+                {onColumnFormatsChange && <ResultColumnFormatControl columns={columns} columnIds={columnIds} formats={columnFormats} onChange={onColumnFormatsChange} onOpen={() => setCopyMenuOpen(false)} />}
             </div>
             <div className="results-grid" ref={wrap}>
                 {size.w > 0 && gridColumns.length > 0 && (
