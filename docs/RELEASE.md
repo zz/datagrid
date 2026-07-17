@@ -8,6 +8,22 @@ maintainer with the credentials.
 
 ## 1. Build (no credentials needed)
 
+Run the release gate from a clean worktree before packaging:
+
+```sh
+make check
+go build ./...
+cd frontend && npm test -- --run && npm run build && cd ..
+make integration-up
+make integration-test
+make integration-down
+git diff --check
+```
+
+The driver integration CI workflow repeats the database suite across the
+versions listed in [DATAGRIP_PARITY.md](DATAGRIP_PARITY.md). Confirm its latest
+scheduled or manually dispatched run is green before tagging.
+
 ```sh
 wails build              # dev/self-signed .app in build/bin/DataGrid.app
 wails build -clean       # clean rebuild
@@ -16,6 +32,15 @@ wails build -clean       # clean rebuild
 The output is `build/bin/DataGrid.app`. The bundle identifier is
 `com.datagrid.app`; product name/version come from `wails.json` → `info`.
 Bump `productVersion` there for each release.
+
+Before the final build, also verify:
+
+- `docs/DATAGRIP_PARITY.md` reflects the shipped scope and known gaps.
+- The release notes call out schema/storage migrations and driver changes.
+- A fresh install and an upgrade from the previous release both open saved
+  connections without exposing credentials or losing workspace state.
+- Query, table edit/apply, Redis edit, backup command preview, and read-only
+  safety workflows pass a native WKWebView smoke test.
 
 ## 2. Code signing — requires Apple Developer ID (maintainer only)
 

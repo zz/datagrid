@@ -2,7 +2,7 @@
 
 A native macOS (Apple Silicon) database GUI tool in the spirit of DataGrip / TablePlus.
 
-- **Status:** v0.3 (2026-07-05) — Go implementation; milestones M0–M5 built (Postgres, MySQL/MariaDB, Redis/Valkey; editing, history, EXPLAIN, cell inspector, prod/read-only labels). Release signing/notarization/auto-update pending Apple credentials (see [RELEASE.md](RELEASE.md)).
+- **Status:** v0.4 (2026-07-17) — core workbench and advanced data/schema workflows built; see [DATAGRIP_PARITY.md](DATAGRIP_PARITY.md) for the current feature ledger. Release signing/notarization/auto-update remain pending Apple credentials (see [RELEASE.md](RELEASE.md)).
 - **Target platform:** macOS 13+ on ARM64 (Apple Silicon) first; architecture keeps the door open for Intel macOS, Linux, and Windows later.
 - **Initial database support:** MySQL / MariaDB, PostgreSQL, Redis / Valkey.
 
@@ -18,8 +18,8 @@ A native macOS (Apple Silicon) database GUI tool in the spirit of DataGrip / Tab
 
 ### Non-goals (v1)
 
-- Database administration features (user management, replication setup, backup scheduling).
-- ER diagrams, schema diff/migration tooling.
+- Replication setup, backup scheduling, and full server-configuration administration.
+- Stored procedure debugging and native bulk-transfer protocols.
 - Other engines (SQLite, MongoDB, ClickHouse, etc.) — the driver layer must make adding them cheap, but none ship in v1.
 - Windows/Linux builds (keep code portable, don't test or package).
 
@@ -150,7 +150,7 @@ datagrid/
 │       ├── components/    # grid, editor, sidebar, inspector
 │       ├── features/      # connections/, query/, tabledata/, redis/, history/
 │       └── ipc/           # typed wrappers over Wails bindings/events
-└── e2e/                   # WebDriver tests against dockerized databases
+└── integration/           # Docker Compose fixtures for supported database versions
 ```
 
 IPC payload types are defined once in Go; Wails generates TypeScript models for all bound structs, so the two sides can't drift. Event payloads not covered by the generator are typed via a small `tygo`-generated module.

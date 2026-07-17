@@ -19,7 +19,7 @@ VOLNAME  = DataGrid
 # Override on the command line: make build-signed IDENTITY="My Identity"
 IDENTITY ?= DataGrid Dev
 
-.PHONY: dev build build-signed sign dmg generate check fmt vet test tsc lint integration-up integration-test integration-down clean
+.PHONY: dev build build-signed sign dmg generate check release-check fmt vet test tsc lint integration-up integration-test integration-down clean
 
 dev:
 	$(WAILS) dev
@@ -53,6 +53,11 @@ generate:
 	$(WAILS) generate module
 
 check: fmt vet test tsc lint
+
+release-check: check
+	go build ./...
+	cd frontend && npm test -- --run && npm run build
+	git diff --check
 
 fmt:
 	@echo "== gofmt ==" && test -z "$$(gofmt -l internal/)" || (gofmt -l internal/ && exit 1)
