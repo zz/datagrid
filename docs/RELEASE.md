@@ -6,6 +6,24 @@ auto-update require an Apple Developer account and signing certificates that
 are not in this repo.** Those steps are called out below and must be run by a
 maintainer with the credentials.
 
+## Automated tag release
+
+Pushing a tag matching `v*` runs `.github/workflows/release.yml`. The workflow
+verifies that the tag matches `wails.json` `productVersion`, runs the complete
+release check, builds the Apple Silicon application and DMG, writes a SHA-256
+checksum, and publishes both files on the corresponding GitHub Release.
+
+```sh
+git tag -a v0.1.0 -m "DataGrid v0.1.0"
+git push origin main
+git push origin v0.1.0
+```
+
+The automated artifact is Wails' default ad-hoc signed build. It is suitable
+for development releases, but it is not Developer ID signed or notarized.
+Complete the credentialed steps below before treating an artifact as a public
+macOS distribution.
+
 ## 1. Build (no credentials needed)
 
 Run the release gate from a clean worktree before packaging:

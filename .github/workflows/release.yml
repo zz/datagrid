@@ -1,0 +1,91 @@
+name: Release DMG
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dmg:
+    name: Build Apple Silicon DMG
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Verify tag matches product version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          product_version="$(node -p "require('./wails.json').info.productVersion")"
+          test "$version" = "$product_version" || {
+            echo "Tag $GITHUB_REF_NAME does not match wails.json productVersion $product_version"
+            exit 1
+          }
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Run release checks
+        run: make release-check
+
+      - name: Build Apple Silicon app
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          "$(go env GOPATH)/bin/wails" build -clean -platform darwin/arm64 \
+            -ldflags "-X datagrid/internal/api.Version=$version"
+
+      - name: Build DMG
+        run: make dmg
+
+      - name: Create checksum
+        working-directory: build/bin
+        run: shasum -a 256 DataGrid.dmg > DataGrid.dmg.sha256
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DataGrid-${{ github.ref_name }}-darwin-arm64
+          path: |
+            build/bin/DataGrid.dmg
+            build/bin/DataGrid.dmg.sha256
+          if-no-files-found: error
+
+      - name: Create GitHub Release and upload DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" \
+              build/bin/DataGrid.dmg build/bin/DataGrid.dmg.sha256 --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              build/bin/DataGrid.dmg build/bin/DataGrid.dmg.sha256 \
+              --title "DataGrid $GITHUB_REF_NAME" \
+              --generate-notes
+          fi
