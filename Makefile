@@ -20,7 +20,7 @@ GO_PACKAGES = . ./internal/...
 # Override on the command line: make build-signed IDENTITY="My Identity"
 IDENTITY ?= DataGrid Dev
 
-.PHONY: dev build build-signed sign dmg generate check release-check fmt vet test tsc lint frontend-build integration-up integration-test integration-down clean
+.PHONY: dev build build-signed sign dmg prepare-embed generate check release-check fmt vet test tsc lint frontend-build integration-up integration-test integration-down clean
 
 dev:
 	$(WAILS) dev
@@ -50,7 +50,10 @@ dmg:
 	  echo "Built $(DMG) ($$(du -h "$(DMG)" | cut -f1))"
 
 # Regenerate the TypeScript bindings for the Go bound methods.
-generate:
+prepare-embed:
+	@mkdir -p frontend/dist && touch frontend/dist/index.html
+
+generate: prepare-embed
 	$(WAILS) generate module
 
 check: fmt tsc lint frontend-build vet test
@@ -69,13 +72,13 @@ vet: frontend-build
 test: frontend-build
 	@echo "== go test ==" && go test $(GO_PACKAGES)
 
-tsc:
+tsc: generate
 	@echo "== tsc ==" && cd frontend && npx tsc --noEmit
 
 lint:
 	@echo "== eslint ==" && cd frontend && npx eslint src --ext .ts,.tsx
 
-frontend-build:
+frontend-build: generate
 	@echo "== frontend build ==" && cd frontend && npm run build
 
 integration-up:
