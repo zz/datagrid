@@ -14,12 +14,13 @@ WAILS   ?= $(HOME)/go/bin/wails
 APP      = build/bin/datagrid.app
 DMG      = build/bin/DataGrid.dmg
 VOLNAME  = DataGrid
+GO_PACKAGES = . ./internal/...
 # Stable self-signed code-signing identity (create once in Keychain Access:
 # Certificate Assistant -> Create a Certificate -> Self-Signed Root, Code Signing).
 # Override on the command line: make build-signed IDENTITY="My Identity"
 IDENTITY ?= DataGrid Dev
 
-.PHONY: dev build build-signed sign dmg generate check release-check fmt vet test tsc lint integration-up integration-test integration-down clean
+.PHONY: dev build build-signed sign dmg generate check release-check fmt vet test tsc lint frontend-build integration-up integration-test integration-down clean
 
 dev:
 	$(WAILS) dev
@@ -52,27 +53,30 @@ dmg:
 generate:
 	$(WAILS) generate module
 
-check: fmt vet test tsc lint
+check: fmt tsc lint frontend-build vet test
 
 release-check: check
-	go build ./...
-	cd frontend && npm test -- --run && npm run build
+	go build $(GO_PACKAGES)
+	cd frontend && npm test -- --run
 	git diff --check
 
 fmt:
 	@echo "== gofmt ==" && test -z "$$(gofmt -l internal/)" || (gofmt -l internal/ && exit 1)
 
-vet:
-	@echo "== go vet ==" && go vet ./...
+vet: frontend-build
+	@echo "== go vet ==" && go vet $(GO_PACKAGES)
 
-test:
-	@echo "== go test ==" && go test ./...
+test: frontend-build
+	@echo "== go test ==" && go test $(GO_PACKAGES)
 
 tsc:
 	@echo "== tsc ==" && cd frontend && npx tsc --noEmit
 
 lint:
 	@echo "== eslint ==" && cd frontend && npx eslint src --ext .ts,.tsx
+
+frontend-build:
+	@echo "== frontend build ==" && cd frontend && npm run build
 
 integration-up:
 	docker compose -f integration/compose.yml up -d --wait
