@@ -12,7 +12,7 @@ import '@glideapps/glide-data-grid/dist/index.css'
 import type { Column, Value } from '../ipc/types'
 import { displayValue } from '../ipc/types'
 import CellInspector from './CellInspector'
-import ContextMenu, { MenuItem } from './ContextMenu'
+import ContextMenu, { gridContextMenuCoordinates, MenuItem } from './ContextMenu'
 import { Copy } from '../../wailsjs/go/api/App'
 import { toCSV, toJSON, toSQL, toTSV } from '../export'
 import { columnStatistics, distinctColumnValues, filterResultExpressionRows, filterResultRows, processResultRows, ResultFilter, ResultFilterExpression, resultFilterExpressionColumns, resultViewSorts, ResultViewState, toggleResultSort, withoutResultFilterExpressionColumn } from '../features/query/resultProcessing'
@@ -391,10 +391,10 @@ export default function ResultsGrid({ connId, columns, rows, editable = false, e
                         onHeaderMenuClick={(displayedColumn, bounds) => { setFacetSearch(''); setServerFacet(null); setHeaderMenu({ displayedColumn, x: bounds.x, y: bounds.y + bounds.height }) }}
                         onCellContextMenu={([col, row], e) => {
                             e.preventDefault()
-                            const rect = wrap.current?.getBoundingClientRect()
+                            const pointer = gridContextMenuCoordinates(e)
                             setMenu({
-                                x: (rect?.left ?? 0) + e.bounds.x + e.localEventX,
-                                y: (rect?.top ?? 0) + e.bounds.y + e.localEventY,
+                                x: pointer.x,
+                                y: pointer.y,
                                 col,
                                 row,
                             })

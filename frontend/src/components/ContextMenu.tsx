@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 export interface MenuItem {
     label: string
@@ -8,10 +8,22 @@ export interface MenuItem {
     separator?: boolean
 }
 
+export function gridContextMenuCoordinates(event: { bounds: { x: number; y: number }; localEventX: number; localEventY: number }) {
+    return { x: event.bounds.x + event.localEventX, y: event.bounds.y + event.localEventY }
+}
+
+export function constrainContextMenuPosition(x: number, y: number, width: number, height: number, viewportWidth: number, viewportHeight: number, margin = 8) {
+    return {
+        left: Math.max(margin, Math.min(x, viewportWidth - width - margin)),
+        top: Math.max(margin, Math.min(y, viewportHeight - height - margin)),
+    }
+}
+
 // ContextMenu renders a right-click menu at (x, y) and closes on outside
 // click, Escape, or after an item is chosen.
 export default function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
     const ref = useRef<HTMLDivElement>(null)
+    const [position, setPosition] = useState({ left: x, top: y })
 
     useEffect(() => {
         const onDown = (e: MouseEvent) => {
@@ -26,14 +38,15 @@ export default function ContextMenu({ x, y, items, onClose }: { x: number; y: nu
         }
     }, [onClose])
 
-    // Keep the menu on-screen.
-    const style: React.CSSProperties = {
-        left: Math.min(x, window.innerWidth - 220),
-        top: Math.min(y, window.innerHeight - items.length * 28 - 10),
-    }
+    useLayoutEffect(() => {
+        const menu = ref.current
+        if (!menu) return
+        const bounds = menu.getBoundingClientRect()
+        setPosition(constrainContextMenuPosition(x, y, bounds.width, bounds.height, window.innerWidth, window.innerHeight))
+    }, [items, x, y])
 
     return (
-        <div className="context-menu" style={style} ref={ref}>
+        <div className="context-menu" style={position} ref={ref}>
             {items.map((it, i) =>
                 it.separator ? (
                     <div key={i} className="context-sep" />
